@@ -25,6 +25,12 @@ export interface RunOptions {
   stdin?: Readable
   stdout?: Writable
   stderr?: Writable
+  /**
+   * 父进程 stdout 是否 TTY，决定是否向子进程注入 FORCE_COLOR。
+   * 缺省读 process.stdout.isTTY；测试可显式注入。
+   * 仅在未注入流（inherit 模式）下生效。
+   */
+  colorTTY?: boolean
 }
 
 /** mode 过滤：候选 = 名 === mode 或以 `mode:` 开头的 scripts（决策 D1） */
@@ -54,11 +60,13 @@ function formatCandidates(scripts: Record<string, string>): string {
  * 返回值为 exit code；可预期错误（DvError）输出到 stderr 并返回 1。
  */
 export async function run(cmdName: string, options: RunOptions = {}): Promise<number> {
-  const stdout = options.stdout ?? process.stdout
-  const stderr = options.stderr ?? process.stderr
+  // dv 自身写错误信息用的兜底流：恒非 undefined，保证 run 内 stderr.write 不炸。
+  // 注意不能把兜底值传给 spawnScript —— 那会让其 inherit 判定恒为 false，
+  // 使 stdio 永远降级为 pipe（子进程 isTTY=false），正是丢色 bug 的根因。
+  const errStderr = options.stderr ?? process.stderr
   const logger: DvLogger = options.logger ?? {
-    info: (msg) => stderr.write(`${msg}\n`),
-    warn: (msg) => stderr.write(`${msg}\n`),
+    info: (msg) => errStderr.write(`${msg}\n`),
+    warn: (msg) => errStderr.write(`${msg}\n`),
   }
 
   let ctx: DvHookContext | undefined
@@ -72,21 +80,21 @@ export async function run(cmdName: string, options: RunOptions = {}): Promise<nu
     await options.hooks?.callHook('scripts:loaded', ctx)
 
     if (Object.keys(candidates).length === 0) {
-      stderr.write(`dv: no scripts in mode "${mode}"\n`)
+      errStderr.write(`dv: no scripts in mode "${mode}"\n`)
       return 1
     }
 
     const result = resolveCommand(cmdName, candidates)
 
     if (result.kind === 'none') {
-      stderr.write(`dv: no script matching "${cmdName}" in mode "${mode}". Available:\n`)
-      stderr.write(`${formatCandidates(candidates)}\n`)
+      errStderr.write(`dv: no script matching "${cmdName}" in mode "${mode}". Available:\n`)
+      errStderr.write(`${formatCandidates(candidates)}\n`)
       return 1
     }
 
     if (result.kind === 'ambiguous') {
-      stderr.write(`dv: "${cmdName}" is ambiguous in mode "${mode}". Candidates:\n`)
-      stderr.write(`${formatCandidates(Object.fromEntries(result.matches.map((m) => [m, candidates[m]])))}\n`)
+      errStderr.write(`dv: "${cmdName}" is ambiguous in mode "${mode}". Candidates:\n`)
+      errStderr.write(`${formatCandidates(Object.fromEntries(result.matches.map((m) => [m, candidates[m]])))}\n`)
       return 1
     }
 
@@ -97,11 +105,14 @@ export async function run(cmdName: string, options: RunOptions = {}): Promise<nu
     const pm = await detectPackageManager(dir)
 
     await options.hooks?.callHook('command:before', ctx)
+    // 传原始 options 流（可能 undefined）：未注入时 spawnScript 走 inherit 模式，
+    // 真正继承父进程 TTY 并注入 FORCE_COLOR；注入流时降级 pipe 供调用方捕获输出
     const exitCode = await spawnScript(pm, result.name, {
       cwd: dir,
       stdin: options.stdin,
-      stdout,
-      stderr,
+      stdout: options.stdout,
+      stderr: options.stderr,
+      colorTTY: options.colorTTY,
     })
 
     ctx.exitCode = exitCode
@@ -109,7 +120,7 @@ export async function run(cmdName: string, options: RunOptions = {}): Promise<nu
     return exitCode
   } catch (error) {
     if (error instanceof DvError) {
-      stderr.write(`dv: ${error.message}\n`)
+      errStderr.write(`dv: ${error.message}\n`)
       return 1
     }
     // 非预期异常同样通知 error hook，插件可据此清理（如 kp 的超时守护）。

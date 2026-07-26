@@ -1,5 +1,7 @@
 export { buildAbbreviationMap, resolveCommand } from './abbr.ts'
 export type { ResolveResult } from './abbr.ts'
+export { resolveColorEnv } from './color.ts'
+export type { ResolveColorEnvInput } from './color.ts'
 export { DvError, fileExists, readProjectPackage, resolveProjectDir } from './pkg.ts'
 export type { ProjectPackage } from './pkg.ts'
 export { detectPackageManager } from './pm.ts'
