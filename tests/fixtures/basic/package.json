@@ -6,6 +6,7 @@
     "dev:web": "node -e \"console.log('WEB_RAN')\"",
     "dev:website": "node -e \"console.log('WEBSITE_RAN')\"",
     "build": "node -e \"process.exit(3)\"",
-    "dev:hang": "node -e \"console.log('HANG_READY'); setTimeout(() => {}, 100000)\""
+    "dev:hang": "node -e \"console.log('HANG_READY'); setTimeout(() => {}, 100000)\"",
+    "dev:bind": "PORT=53992 node -e \"const p=Number(process.env.PORT);require('http').createServer().listen(p,'127.0.0.1',()=>{console.log('BIND_OK');process.exit(0)}).on('error',()=>{console.error('BIND_FAIL');process.exit(1)})\""
   }
 }

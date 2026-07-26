@@ -1,16 +1,9 @@
 import type { DvHookable } from '../core/hooks.ts'
 import type { DvPlugin } from './types.ts'
+import { killportPlugin } from './killport/index.ts'
 import { isPluginEnabled, readConfig } from './state.ts'
 
-/**
- * killport 内置插件骨架：先建立注册与状态管理通路，
- * 端口解析与查杀行为由插件实现填充。
- */
-export const killportPlugin: DvPlugin = {
-  name: 'kp',
-  description: 'Kill processes occupying the target dev server port before running a script',
-  setup: () => {},
-}
+export { killportPlugin }
 
 /** 内置插件注册表：顺序即 plugins list 的展示顺序 */
 export const BUILTIN_PLUGINS: DvPlugin[] = [killportPlugin]
