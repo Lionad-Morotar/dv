@@ -17,7 +17,9 @@ const basic = fileURLToPath(new URL('./fixtures/basic', import.meta.url))
  */
 describe('npm distribution', () => {
   it('packs and installs globally, exposing a working dv command', async () => {
-    await execFileAsync('pnpm', ['build'], { cwd: root })
+    // 直调构建二进制而非 pnpm build：build 的 prebuild 钩子是全量测试，
+    // 经脚本调用会递归跑回本测试自身
+    await execFileAsync('pnpm', ['exec', 'vp', 'pack', 'src/cli.ts', '--dts', 'false'], { cwd: root })
 
     const packDir = await mkdtemp(join(tmpdir(), 'dv-pack-'))
     const { stdout: packOut } = await execFileAsync(

@@ -2,6 +2,13 @@
   "name": "@lionad/dv",
   "version": "0.1.0",
   "description": "npm scripts shortcut launcher with runtime plugin hooks and built-in killport",
+  "author": "Lionad <tangnad@qq.com> (https://github.com/Lionad-Morotar)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Lionad-Morotar/dv.git"
+  },
+  "homepage": "https://github.com/Lionad-Morotar/dv#readme",
+  "bugs": "https://github.com/Lionad-Morotar/dv/issues",
   "license": "MIT",
   "keywords": [
     "dev",
@@ -24,7 +31,10 @@
     "node": ">=20.19.0"
   },
   "scripts": {
+    "prebuild": "pnpm test",
     "build": "vp pack src/cli.ts --dts false",
+    "prerelease": "pnpm run build",
+    "release": "pnpm publish --config.registry=https://registry.npmjs.org --no-git-checks",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
