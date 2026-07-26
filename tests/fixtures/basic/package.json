@@ -1,0 +1,11 @@
+{
+  "name": "fixture-basic",
+  "private": true,
+  "scripts": {
+    "dev": "node -e \"console.log('DEV_RAN')\"",
+    "dev:web": "node -e \"console.log('WEB_RAN')\"",
+    "dev:website": "node -e \"console.log('WEBSITE_RAN')\"",
+    "build": "node -e \"process.exit(3)\"",
+    "dev:hang": "node -e \"console.log('HANG_READY'); setTimeout(() => {}, 100000)\""
+  }
+}
