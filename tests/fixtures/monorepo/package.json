@@ -1,0 +1,8 @@
+{
+  "name": "fixture-monorepo",
+  "private": true,
+  "scripts": {
+    "dev:filtered": "pnpm --filter @test/web dev",
+    "dev:chdir": "pnpm -C packages/web dev"
+  }
+}

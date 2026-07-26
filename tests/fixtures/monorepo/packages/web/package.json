@@ -1,0 +1,7 @@
+{
+  "name": "@test/web",
+  "private": true,
+  "scripts": {
+    "dev": "node -e \"require('http').createServer().listen(53993,'127.0.0.1',()=>{console.log('WEB_RAN');process.exit(0)}).on('error',()=>{console.error('WEB_FAIL');process.exit(1)})\""
+  }
+}

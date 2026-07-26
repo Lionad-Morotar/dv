@@ -1,0 +1,7 @@
+{
+  "name": "fixture-viteproj",
+  "private": true,
+  "scripts": {
+    "dev": "node -e \"require('http').createServer().listen(53994,'127.0.0.1',()=>{console.log('VITE_RAN');process.exit(0)}).on('error',()=>{console.error('VITE_FAIL');process.exit(1)})\""
+  }
+}
