@@ -6,10 +6,11 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-28
+
 ### Fixed
 
-- kp 端口解析补全 pnpm monorepo 委托链：script 为 `pnpm -C/--filter` 委托命令时，穿透到目标包读取被委托 script 的命令文本并解析显式端口（如 `pnpm --filter web dev` → 子包 `nuxt dev --port 2350` → 2350）。此前只穿透目录查框架 config，端口仅声明在子包 script 命令行时 kp 误报「no port detected, skipping」。解析链优先级：根 script 显式端口 > 委托 script 显式端口 > 框架 config
-- kp 修复失败委托的端口错杀面：`--filter` 包名无匹配时整条解析链跳过，不再回落根目录搜索框架 config（此前委托 script 层已不回落，但 config 搜索仍经 resolveScriptDir 兜底命中根包，根包含端口 config 时会错杀其上的进程）
+- kp 端口解析穿透 pnpm monorepo 委托链，失败委托不再回落根包：script 为 `pnpm -C/--filter` 委托命令时，穿透到目标包读取被委托 script 的命令文本并解析显式端口（如 `pnpm --filter web dev` → 子包 `nuxt dev --port 2350` → 2350；此前只查框架 config，端口仅声明在命令行时 kp 误报「no port detected, skipping」）。解析链优先级：根 script 显式端口 > 委托 script 显式端口 > 框架 config；`--filter` 包名无匹配时整链跳过、不回落根包 config 搜索，杜绝错杀无关进程
 
 ## [0.1.1] - 2026-07-27
 
