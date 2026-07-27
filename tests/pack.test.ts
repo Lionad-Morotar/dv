@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { execFile } from 'node:child_process'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -10,6 +10,10 @@ const execFileAsync = promisify(execFile)
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const basic = fileURLToPath(new URL('./fixtures/basic', import.meta.url))
+// 从 package.json 动态读取版本号，避免发版后断言失效
+const { version } = JSON.parse(
+  await readFile(join(root, 'package.json'), 'utf8'),
+)
 
 /**
  * 分发验收（对应需求 P1）：npm install -g 后 dv 命令自动注册可用。
@@ -35,9 +39,9 @@ describe('npm distribution', () => {
     })
 
     const dv = join(prefix, 'bin', 'dv')
-    // cac 的 --version 输出完整 banner：dv/0.1.0 darwin-arm64 node-vX.Y.Z
-    const { stdout: version } = await execFileAsync(dv, ['--version'])
-    expect(version).toContain('dv/0.1.0')
+    // cac 的 --version 输出完整 banner：dv/<version> darwin-arm64 node-vX.Y.Z
+    const { stdout: versionOut } = await execFileAsync(dv, ['--version'])
+    expect(versionOut).toContain(`dv/${version}`)
 
     const { stdout } = await execFileAsync(dv, ['dev', '--path', basic])
     expect(stdout).toContain('DEV_RAN')

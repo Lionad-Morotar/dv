@@ -1,6 +1,6 @@
 {
   "name": "@lionad/dv",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "npm scripts shortcut launcher with runtime plugin hooks and built-in killport",
   "author": "Lionad <tangnad@qq.com> (https://github.com/Lionad-Morotar)",
   "repository": {

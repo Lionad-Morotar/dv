@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-27
+
+### Fixed
+
+- `dv` 启动的子进程现在能正确继承终端色彩：修复 `run()` 用兜底流（pipe）传给 `spawnScript` 导致 `stdio: 'inherit'` 判定恒为 false、子进程 stdout 沦为管道（isTTY=false）进而被颜色库禁色的问题；TTY 场景额外注入 `FORCE_COLOR=1` 并尊重既有 `NO_COLOR`
+
 ## [0.1.0] - 2026-07-26
 
 ### Added
