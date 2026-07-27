@@ -1,0 +1,7 @@
+{
+  "name": "@test/cfg",
+  "private": true,
+  "scripts": {
+    "dev": "node server.cjs --port 53997"
+  }
+}

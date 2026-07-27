@@ -2,7 +2,11 @@
   "name": "fixture-monorepo",
   "private": true,
   "scripts": {
+    "dev": "echo ROOT_DEV",
     "dev:filtered": "pnpm --filter @test/web dev",
-    "dev:chdir": "pnpm -C packages/web dev"
+    "dev:chdir": "pnpm -C packages/web dev",
+    "dev:app": "pnpm --filter @test/app dev",
+    "dev:cfg": "pnpm --filter @test/cfg dev",
+    "dev:ghost": "pnpm --filter @test/ghost dev"
   }
 }

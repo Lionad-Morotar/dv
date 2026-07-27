@@ -66,9 +66,10 @@ dev script 执行前清场目标端口上的监听进程（SIGTERM，不升级 S
 端口来源按优先级：
 
 1. script 文本显式端口：`--port 3001` > `PORT=3001` > 框架上下文 `-p 3001`（仅当 script 含 nuxt/vite/astro/next 等框架命令时，`-p` 才解释为端口）
-2. 框架 config 静态提取：`vite.config.*` / `astro.config.*` / `rsbuild.config.*` 的 `server.port`，`nuxt.config.*` 的 `devServer.port`。只认对象直接子级的数字字面量；变量引用与表达式提取不到，按跳过处理
+2. 委托 script 显式端口：script 为 `pnpm -C <dir>` / `pnpm --filter <pkg>` 委托命令时，穿透到目标包读取被委托 script 的命令文本，按第 1 条规则解析（如根 script `pnpm --filter web dev` → 子包 `dev: nuxt dev --port 2350` → 2350）
+3. 框架 config 静态提取：`vite.config.*` / `astro.config.*` / `rsbuild.config.*` 的 `server.port`，`nuxt.config.*` 的 `devServer.port`。只认对象直接子级的数字字面量；变量引用与表达式提取不到，按跳过处理
 
-monorepo 支持：script 为 `pnpm -C <dir>` / `pnpm --filter <pkg>` 时，config 搜索目录穿透到子包（`--filter` 经 pnpm-workspace.yaml 包名映射）。
+monorepo 支持：script 为 `pnpm -C <dir>` / `pnpm --filter <pkg>` 时，委托 script 与 config 的搜索目录均穿透到子包（`--filter` 经 pnpm-workspace.yaml 包名映射）。`--filter` 包名无匹配视为委托失败，整条解析链跳过（不回落根包搜索），杜绝从无关实体提取端口而错杀。
 
 ## 开发
 

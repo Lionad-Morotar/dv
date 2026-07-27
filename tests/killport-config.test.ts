@@ -17,6 +17,9 @@ const hasPnpm = await execFileAsync('pnpm', ['--version']).then(
 
 const VITE_PORT = 53994
 const MONO_PORT = 53993
+const APP_PORT = 53995
+const CFG_SCRIPT_PORT = 53997
+const ROOT_CONFIG_PORT = 53998
 const viteproj = fileURLToPath(new URL('./fixtures/viteproj', import.meta.url))
 const monorepo = fileURLToPath(new URL('./fixtures/monorepo', import.meta.url))
 
@@ -66,6 +69,58 @@ describe('kp config extraction', () => {
     expect(code).toBe(0)
     expect(out.text).toContain('WEB_RAN')
     expect(out.text).toContain(`kp: killed pid ${child.pid} on port ${MONO_PORT}`)
+    expect((await exited).signal).toBe('SIGTERM')
+  }, 20000)
+
+  it.skipIf(!hasPnpm)('extracts the port from the delegated workspace package script', async () => {
+    const child = await occupyPort(APP_PORT)
+    const exited = exitOf(child)
+
+    const out = new CaptureStream()
+    const hooks = createHooks<DvHooks>()
+    await registerPlugins(hooks, BUILTIN_PLUGINS, await freshConfigPath())
+
+    const code = await run('dev:app', { path: monorepo, hooks, stdout: out, stderr: out })
+
+    expect(code).toBe(0)
+    expect(out.text).toContain('APP_RAN')
+    expect(out.text).toContain(`kp: killed pid ${child.pid} on port ${APP_PORT}`)
+    expect((await exited).signal).toBe('SIGTERM')
+  }, 20000)
+
+  it.skipIf(!hasPnpm)('does not fall back to the root config when --filter matches nothing', async () => {
+    // 根包 vite.config 声明 53998、dev:ghost 的 filter 无匹配：委托失败的命令
+    // 必然执行失败，kp 回落根包 config 会错杀 53998 上的无辜进程
+    const child = await occupyPort(ROOT_CONFIG_PORT)
+    try {
+      const out = new CaptureStream()
+      const hooks = createHooks<DvHooks>()
+      await registerPlugins(hooks, BUILTIN_PLUGINS, await freshConfigPath())
+
+      await run('dev:ghost', { path: monorepo, hooks, stdout: out, stderr: out })
+
+      expect(out.text).toContain('kp: no port detected, skipping')
+      expect(child.exitCode).toBeNull()
+    } finally {
+      child.kill('SIGTERM')
+    }
+  }, 20000)
+
+  it.skipIf(!hasPnpm)('prefers the delegated script port over the package config port', async () => {
+    // cfg 包 script 声明 53997、vite.config 声明 53996：kp 取错端口则占用进程存活，
+    // server.cjs 绑定 53997 撞占用而 APP_FAIL，exit code 非 0
+    const child = await occupyPort(CFG_SCRIPT_PORT)
+    const exited = exitOf(child)
+
+    const out = new CaptureStream()
+    const hooks = createHooks<DvHooks>()
+    await registerPlugins(hooks, BUILTIN_PLUGINS, await freshConfigPath())
+
+    const code = await run('dev:cfg', { path: monorepo, hooks, stdout: out, stderr: out })
+
+    expect(code).toBe(0)
+    expect(out.text).toContain('CFG_RAN')
+    expect(out.text).toContain(`kp: killed pid ${child.pid} on port ${CFG_SCRIPT_PORT}`)
     expect((await exited).signal).toBe('SIGTERM')
   }, 20000)
 })

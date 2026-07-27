@@ -3,7 +3,7 @@ import type { DvPlugin } from '../types.ts'
 import { extractPortFromConfig, loadFrameworkConfig } from './config.ts'
 import { killProcessOnPort } from './kill.ts'
 import { parsePortFromScript } from './port.ts'
-import { resolveScriptDir } from './workspace.ts'
+import { resolveDelegatedScriptText, resolveScriptDir } from './workspace.ts'
 
 /**
  * killport 插件：dev script 执行前清场目标端口上的监听进程。
@@ -28,14 +28,24 @@ export const killportPlugin: DvPlugin = {
 }
 
 /**
- * 端口解析链：script 文本显式端口 > 框架 config 静态提取。
- * config 搜索目录经 pnpm -C/--filter 穿透——monorepo 下端口声明在子包的 config 里。
+ * 端口解析链：根 script 显式端口 > 委托 script 显式端口 > 框架 config 静态提取。
+ * pnpm -C/--filter 先穿透出执行目录，委托 script 与 config 搜索共用这一个目录——
+ * 单一解析路径避免两条兜底语义漂移。monorepo 下端口常声明在子包 script 命令行
+ * （nuxt dev --port 2350），命令行在运行时覆盖 config 文件，故优先于 config。
+ * --filter 包名无匹配时 resolveScriptDir 判 null：委托失败的命令必然执行失败，
+ * 全链跳过，不回落根包搜索，杜绝从无关实体提取端口而错杀。
  */
 async function resolvePort(ctx: DvHookContext): Promise<number | null> {
   if (!ctx.scriptText) return null
   const fromScript = parsePortFromScript(ctx.scriptText)
   if (fromScript !== null) return fromScript
   const configDir = await resolveScriptDir(ctx.scriptText, ctx.dir)
+  if (configDir === null) return null
+  const delegatedText = await resolveDelegatedScriptText(ctx.scriptText, configDir)
+  if (delegatedText !== null) {
+    const fromDelegated = parsePortFromScript(delegatedText)
+    if (fromDelegated !== null) return fromDelegated
+  }
   const config = await loadFrameworkConfig(configDir)
   if (config === null) return null
   return extractPortFromConfig(config.code, config.kind)
