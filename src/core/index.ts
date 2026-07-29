@@ -1,4 +1,4 @@
-export { buildAbbreviationMap, resolveCommand } from './abbr.ts'
+export { buildAbbreviationMap, isSubsequence, resolveCommand, scoreSubsequence } from './abbr.ts'
 export type { ResolveResult } from './abbr.ts'
 export { resolveColorEnv } from './color.ts'
 export type { ResolveColorEnvInput } from './color.ts'

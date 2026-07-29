@@ -16,13 +16,14 @@ npm install -g @lionad/dv
 dv <cmd> [--path <dir>] [--mode <mode>]
 ```
 
-- `<cmd>`：script 名、缩写或唯一前缀（详见下文解析规则）
+- `<cmd>`：script 名、缩写、唯一前缀或凭名字记忆的模糊把手（详见下文解析规则）
 - `--path`：目标项目目录，默认当前目录
 - `--mode`：script 域过滤，默认 `dev`——候选为名为 `dev` 或以 `dev:` 开头的 scripts；`--mode build` 则匹配 `build` / `build:*`
 
 ```bash
 dv dev              # 等价于 pnpm dev（包管理器按 lock 文件自动检测）
 dv dw               # dev:web 的缩写
+dv website          # 模糊子序列命中 dev:website（凭名字记忆即可）
 dv dev:web --path ../other-project
 dv build --mode build
 ```
@@ -31,7 +32,7 @@ dv build --mode build
 
 ## 命令解析规则
 
-按优先级：全名精确匹配 > 缩写精确匹配 > 全名前缀唯一匹配 > 歧义报错（列出候选表）。
+按优先级：全名精确匹配 > 缩写精确匹配 > 全名前缀唯一匹配 > 模糊子序列唯一匹配 > 歧义报错（列出候选表）。
 
 缩写由各 `:` 分段的首字母拼接而成。冲突时按 scripts 声明顺序先占最短，后声明者从最后一段起逐字符加长直到唯一：
 
@@ -47,6 +48,15 @@ dv build --mode build
 ```
 
 中间形态前缀（如 `dv dev:w`）在唯一时同样可用。
+
+前三级都落空时进入模糊子序列（subsequence）匹配：输入字符按顺序出现在 script 名中即算命中，不必连续、不区分大小写。这让你凭名字记忆敲入把手，无需记住缩写或日期前缀：
+
+```bash
+dv room             # 唯一含 room → dev:260728-pure-line-room-tour
+dv dplr             # 首字母式把手，词首命中得分更高 → pure-line-room-tour
+```
+
+命中多个时按匹配质量择优：词首命中（分隔符之后的字符）与连续命中加分，唯一最高分直接执行；最高分并列（如 `shine` 之于 `shine-cards` / `shine-cards-kimi`）则与全名前缀一样报歧义、列出候选表，绝不因细微分差静默猜错。
 
 ## 插件
 

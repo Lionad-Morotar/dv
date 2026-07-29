@@ -100,6 +100,25 @@ describe('dv <cmd>', () => {
     expect(out.text).toContain('dev:website')
   })
 
+  it('runs a script resolved only by fuzzy subsequence (website -> dev:website)', async () => {
+    // website 既非全名/缩写，也不是任何 script 的前缀，只能由模糊阶段兜底命中
+    const out = new CaptureStream()
+    const code = await run('website', { path: fixtures.basic, stdout: out, stderr: out })
+    expect(code).toBe(0)
+    expect(out.text).toContain('WEBSITE_RAN')
+    expect(out.text).not.toContain('WEB_RAN\n')
+  })
+
+  it('refuses an ambiguous fuzzy match and lists the candidates', async () => {
+    // web 是 dev:web 与 dev:website 的公共子序列——模糊命中多个时报歧义而非猜
+    const out = new CaptureStream()
+    const code = await run('web', { path: fixtures.basic, stdout: out, stderr: out })
+    expect(code).toBe(1)
+    expect(out.text).toContain('ambiguous')
+    expect(out.text).toContain('dev:web')
+    expect(out.text).toContain('dev:website')
+  })
+
   it('annotates candidates with their abbreviations when nothing matches', async () => {
     const out = new CaptureStream()
     await run('zzz', { path: fixtures.basic, stdout: out, stderr: out })
