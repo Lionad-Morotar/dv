@@ -1,0 +1,12 @@
+{
+  "name": "fixture-declare-cfg",
+  "private": true,
+  "scripts": {
+    "dev": "node -e \"console.log('DECLARE_CFG_RAN')\""
+  },
+  "dv": {
+    "killport": {
+      "dev": 54007
+    }
+  }
+}

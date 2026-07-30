@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- kp 端口解析链新增项目级显式声明来源：package.json `dv.killport.<scriptName>` 直接声明端口，覆盖命令行无端口、无框架 config 的 script（如 `cd backend && air`，端口藏在运行时 env 里，此前 kp 只能报「no port detected, skipping」）。解析链优先级：根 script 显式端口 > 委托 script 显式端口 > 项目声明 > 框架 config——命令行 runtime 真相恒优先于一切静态来源；声明按解析后的全 script 名匹配，畸形值 warn 并视为未声明、不阻断 script 启动；委托失败（`--filter` 无匹配）时声明同样不查，整链跳过
+
 ## [0.1.3] - 2026-07-30
 
 ### Added

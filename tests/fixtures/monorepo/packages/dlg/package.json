@@ -1,0 +1,7 @@
+{
+  "name": "@test/dlg",
+  "private": true,
+  "scripts": {
+    "dev": "node server.cjs --port 54005"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "fixture-declare",
+  "private": true,
+  "scripts": {
+    "dev": "node -e \"console.log('DECLARED_RAN')\"",
+    "dev:explicit": "PORT=54002 node -e \"const p=Number(process.env.PORT);require('http').createServer().listen(p,'127.0.0.1',()=>{console.log('EXPLICIT_RAN');process.exit(0)}).on('error',()=>{console.error('EXPLICIT_FAIL');process.exit(1)})\"",
+    "dev:bad-str": "node -e \"console.log('BADSTR_RAN')\"",
+    "dev:bad-range": "node -e \"console.log('BADRANGE_RAN')\""
+  },
+  "dv": {
+    "killport": {
+      "dev": 54000,
+      "dev:explicit": 54001,
+      "dev:bad-str": "not-a-port",
+      "dev:bad-range": 99999
+    }
+  }
+}

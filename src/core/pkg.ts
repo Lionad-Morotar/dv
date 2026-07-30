@@ -8,6 +8,11 @@ export interface ProjectPackage {
   dir: string
   name?: string
   scripts: Record<string, string>
+  /**
+   * 原始 `dv` 配置 key：core 只透传不解释——配置语义归各插件（如 kp 的端口声明），
+   * 畸形值由消费方 warn 降级；此处校验并 throw 会让一个插件的配置问题炸掉整个 dv。
+   */
+  dv?: unknown
 }
 
 /**
@@ -50,6 +55,7 @@ export async function readProjectPackage(dir: string): Promise<ProjectPackage> {
     dir,
     name: typeof raw.name === 'string' ? raw.name : undefined,
     scripts: scripts as Record<string, string>,
+    dv: raw.dv,
   }
 }
 

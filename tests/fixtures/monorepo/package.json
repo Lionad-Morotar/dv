@@ -7,6 +7,13 @@
     "dev:chdir": "pnpm -C packages/web dev",
     "dev:app": "pnpm --filter @test/app dev",
     "dev:cfg": "pnpm --filter @test/cfg dev",
-    "dev:ghost": "pnpm --filter @test/ghost dev"
+    "dev:ghost": "pnpm --filter @test/ghost dev",
+    "dev:dlg": "pnpm --filter @test/dlg dev"
+  },
+  "dv": {
+    "killport": {
+      "dev:dlg": 54008,
+      "dev:ghost": 54004
+    }
   }
 }
