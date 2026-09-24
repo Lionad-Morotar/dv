@@ -32,7 +32,7 @@
   },
   "scripts": {
     "prebuild": "pnpm test",
-    "build": "vp pack src/cli.ts --dts false",
+    "build": "vp pack src/cli.ts src/plugins/bind/privileged.ts --dts false",
     "prerelease": "pnpm run build",
     "release": "pnpm publish --config.registry=https://registry.npmjs.org --no-git-checks",
     "test": "vitest run",
