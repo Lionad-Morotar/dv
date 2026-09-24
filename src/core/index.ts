@@ -6,5 +6,6 @@ export { DvError, fileExists, readProjectPackage, resolveProjectDir } from './pk
 export type { ProjectPackage } from './pkg.ts'
 export { detectPackageManager } from './pm.ts'
 export type { PackageManager } from './pm.ts'
+export { resolvePort } from './port/index.ts'
 export { spawnScript } from './spawn.ts'
 export type { SpawnScriptOptions } from './spawn.ts'

@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { fileExists } from '../../core/pkg.ts'
+import { fileExists } from '../pkg.ts'
 
 export type FrameworkKind = 'vite' | 'nuxt'
 

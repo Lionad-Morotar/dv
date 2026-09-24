@@ -1,5 +1,5 @@
-import type { DvLogger } from '../../core/hooks.ts'
-import type { ProjectPackage } from '../../core/pkg.ts'
+import type { DvLogger } from '../hooks.ts'
+import type { ProjectPackage } from '../pkg.ts'
 
 /**
  * 项目级显式端口声明：package.json 的 `dv.killport.<scriptName>`。

@@ -1,7 +1,7 @@
 import { readFile, readdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
-import { fileExists } from '../../core/pkg.ts'
+import { fileExists } from '../pkg.ts'
 
 /** script 中的 pnpm 目录指示：-C/--dir 是显式路径，-F/--filter 是包名（需 workspace 映射） */
 export type PnpmDirFlag = { kind: 'dir'; path: string } | { kind: 'filter'; name: string }

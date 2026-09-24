@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { parsePortFromScript } from '../src/plugins/killport/port.ts'
+import { parsePortFromScript } from '../src/core/port/port.ts'
 
 describe('parsePortFromScript', () => {
   it.each([

@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { extractPortFromConfig, loadFrameworkConfig } from '../src/plugins/killport/config.ts'
+import { extractPortFromConfig, loadFrameworkConfig } from '../src/core/port/config.ts'
 
 describe('extractPortFromConfig', () => {
   it.each([

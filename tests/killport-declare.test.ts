@@ -6,7 +6,7 @@ import { createHooks } from 'hookable'
 
 import type { DvHooks } from '../src/core/hooks.ts'
 import { run } from '../src/run.ts'
-import { extractDeclaredPort } from '../src/plugins/killport/declare.ts'
+import { extractDeclaredPort } from '../src/core/port/declare.ts'
 import { BUILTIN_PLUGINS, registerPlugins } from '../src/plugins/registry.ts'
 import { CaptureStream, exitOf, freshConfigPath, occupyPort } from './helpers.ts'
 

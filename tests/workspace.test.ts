@@ -8,7 +8,7 @@ import {
   resolveDelegatedScriptText,
   resolveScriptDir,
   resolveWorkspacePackageDir,
-} from '../src/plugins/killport/workspace.ts'
+} from '../src/core/port/workspace.ts'
 
 const monorepo = fileURLToPath(new URL('./fixtures/monorepo', import.meta.url))
 const basic = fileURLToPath(new URL('./fixtures/basic', import.meta.url))
