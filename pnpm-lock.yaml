@@ -11,6 +11,9 @@ importers:
       cac:
         specifier: ^7.0.0
         version: 7.0.0
+      dns2:
+        specifier: ^3.1.1
+        version: 3.1.1
       hookable:
         specifier: ^6.1.1
         version: 6.1.1
@@ -1085,6 +1088,10 @@ packages:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
     engines: {node: '>=8'}
 
+  dns2@3.1.1:
+    resolution: {integrity: sha512-YesLP4UjH7uzFIlNEruPrijm5UNaDWRS8EdyAyOaysLuEuJnmyngrAqd9lDZNDLNRgZdwrkd4x49s7j5kV/Ksw==}
+    engines: {node: '>=22'}
+
   dom-accessibility-api@0.5.16:
     resolution: {integrity: sha512-X7BJ2yElsnOJ30pZF4uIIDfBEVgF4XEBxL9Bxhy6dnrm5hkzqmsWHGTiHqRiITNhMyFLyAiWndIJP7Z1NTteDg==}
 
@@ -2038,6 +2045,8 @@ snapshots:
   dequal@2.0.3: {}
 
   detect-libc@2.1.2: {}
+
+  dns2@3.1.1: {}
 
   dom-accessibility-api@0.5.16: {}
 

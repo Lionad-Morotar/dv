@@ -28,7 +28,7 @@
     "dist"
   ],
   "engines": {
-    "node": ">=20.19.0"
+    "node": ">=22"
   },
   "scripts": {
     "prebuild": "pnpm test",
@@ -41,6 +41,7 @@
   },
   "dependencies": {
     "cac": "^7.0.0",
+    "dns2": "^3.1.1",
     "hookable": "^6.1.1"
   },
   "devDependencies": {
