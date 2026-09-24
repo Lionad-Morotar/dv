@@ -1,12 +1,13 @@
 import type { DvHookable } from '../core/hooks.ts'
 import type { DvPlugin } from './types.ts'
+import { bindPlugin } from './bind/index.ts'
 import { killportPlugin } from './killport/index.ts'
 import { isPluginEnabled, readConfig } from './state.ts'
 
 export { killportPlugin }
 
-/** 内置插件注册表：顺序即 plugins list 的展示顺序 */
-export const BUILTIN_PLUGINS: DvPlugin[] = [killportPlugin]
+/** 内置插件注册表：顺序即 plugins list 的展示顺序（kp 须在 bind 前清场目标端口） */
+export const BUILTIN_PLUGINS: DvPlugin[] = [killportPlugin, bindPlugin]
 
 /**
  * 把启用状态的插件挂载到 hooks。禁用插件完全不执行 setup——

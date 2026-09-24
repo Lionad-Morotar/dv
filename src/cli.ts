@@ -28,16 +28,24 @@ const cli = cac('dv')
 // 未命中 plugins 等命名命令的输入一律进入 script 匹配流程
 cli
   .command('<cmd>', 'Run an npm script by full name or shortest unique prefix')
-  .action(async (cmdName: string, options: { path?: string; mode: string }) => {
+  .action(async (cmdName: string, options: { path?: string; mode: string; bind?: string | string[] }) => {
     const hooks = createHooks<DvHooks>()
     await registerPlugins(hooks, BUILTIN_PLUGINS, resolveConfigPath())
-    process.exitCode = await run(cmdName, { path: options.path, mode: options.mode, hooks })
+    // cac 对重复 option 自动数组化，单次传参是裸字符串——在此归一，下游只见 string[]
+    const bind = [options.bind ?? []].flat().filter((d): d is string => typeof d === 'string')
+    process.exitCode = await run(cmdName, {
+      path: options.path,
+      mode: options.mode,
+      bind: bind.length > 0 ? bind : undefined,
+      hooks,
+    })
   })
 
 // --path/--mode 注册为全局选项：帮助输出可见（需求侧把它们视为 dv 的公共入口面），
 // 且未来其他命名命令（如 plugins 之外的）也能复用同一套项目定位参数
 cli.option('--path <path>', 'Project directory (default: cwd)')
 cli.option('--mode <mode>', 'Script scope filter: dev | build', { default: 'dev' })
+cli.option('--bind <domain>', 'Bind domain to the dev server (repeatable, needs sudo once)')
 
 cli
   .command('plugins [sub] [name]', 'Manage plugins: list | enable | disable (default: list)')

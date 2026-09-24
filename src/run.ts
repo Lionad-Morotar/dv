@@ -16,6 +16,8 @@ export interface RunOptions {
   path?: string
   /** script 域过滤：只匹配名为 mode 或以 `mode:` 开头的 scripts */
   mode?: string
+  /** --bind 绑定域列表，透传给 bind 插件（command:before 时完成系统绑定） */
+  bind?: string[]
   /** 测试注入：替代 process.cwd() */
   cwd?: string
   /** 插件 hook 实例，缺省则无 hook 触发 */
@@ -76,7 +78,7 @@ export async function run(cmdName: string, options: RunOptions = {}): Promise<nu
     const mode = options.mode ?? 'dev'
     const candidates = filterScriptsByMode(pkg.scripts, mode)
 
-    ctx = { dir, pkg, mode, logger }
+    ctx = { dir, pkg, mode, bind: options.bind, logger }
     await options.hooks?.callHook('scripts:loaded', ctx)
 
     if (Object.keys(candidates).length === 0) {

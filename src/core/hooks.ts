@@ -16,6 +16,8 @@ export interface DvHookContext {
   dir: string
   pkg: ProjectPackage
   mode: string
+  /** CLI --bind 透传的绑定域列表（可重复选项的归一化结果），空/缺省表示未启用绑定 */
+  bind?: string[]
   scriptName?: string
   scriptText?: string
   exitCode?: number
