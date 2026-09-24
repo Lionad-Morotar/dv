@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer, connect, type Server, type Socket } from 'node:net'
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -226,5 +226,142 @@ describe('spawnBindHelper（启动器）', () => {
         command: [process.execPath, quitter],
       }),
     ).rejects.toThrow(/helper 退出/)
+  })
+})
+
+describe('privileged helper：stale 清扫与 hosts 降级', () => {
+  let dir: string
+  let children: ChildProcess[]
+
+  afterEach(async () => {
+    for (const child of children) {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+    }
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  /** 拿一个确定已死的 pid：spawn 后等它退出 */
+  async function deadPid(): Promise<number> {
+    const p = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' })
+    await new Promise<void>((r) => p.on('exit', () => r()))
+    return p.pid!
+  }
+
+  it('marks resolver files with the helper pid', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'dv-helper-'))
+    children = []
+    const child = spawnHelper([
+      '--proxy-port', '1', '--dns-port', '5353', '--parent-pid', String(process.pid),
+      '--resolver-dir', dir, '--http-port', '0', '--no-flush', 'dv-test.invalid',
+    ])
+    children.push(child)
+    await waitReady(child)
+    const content = await readFile(join(dir, 'dv-test.invalid'), 'utf8')
+    expect(content).toMatch(new RegExp(`# dv:bind pid=${child.pid}`))
+  })
+
+  it('sweeps stale resolver files of dead helpers but keeps live and foreign ones', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'dv-helper-'))
+    children = []
+    const stale = await deadPid()
+    await writeFile(join(dir, 'stale.invalid'), `nameserver 127.0.0.1\nport 1111\n# dv:bind pid=${stale}\n`)
+    await writeFile(join(dir, 'live.invalid'), `nameserver 127.0.0.1\nport 2222\n# dv:bind pid=${process.pid}\n`)
+    await writeFile(join(dir, 'foreign.invalid'), 'nameserver 8.8.8.8\n')
+
+    const child = spawnHelper([
+      '--proxy-port', '1', '--dns-port', '5353', '--parent-pid', String(process.pid),
+      '--resolver-dir', dir, '--http-port', '0', '--no-flush', 'dv-test.invalid',
+    ])
+    children.push(child)
+    await waitReady(child)
+    const files = (await readdir(dir)).sort()
+    expect(files).toEqual(['dv-test.invalid', 'foreign.invalid', 'live.invalid'])
+  })
+
+  it('hosts-fallback mode writes marked hosts lines instead of resolver files and removes them on exit', { timeout: 15000 }, async () => {
+    dir = await mkdtemp(join(tmpdir(), 'dv-helper-'))
+    children = []
+    const hostsFile = join(dir, 'etc', 'hosts')
+    await mkdir(join(dir, 'etc'))
+    await writeFile(hostsFile, '127.0.0.1 localhost\n')
+    const parent = spawnFakeParent()
+    const child = spawnHelper([
+      '--proxy-port', '1', '--dns-port', '5353', '--parent-pid', String(parent.pid),
+      '--resolver-dir', dir, '--http-port', '0', '--no-flush',
+      '--hosts-fallback', '--hosts-file', hostsFile, 'dv-test.invalid',
+    ])
+    children.push(child)
+    await waitReady(child)
+    // hosts 模式不写 resolver 文件
+    expect(await readdir(dir)).toEqual(['etc'])
+    const hosts = await readFile(hostsFile, 'utf8')
+    expect(hosts).toContain('127.0.0.1 localhost')
+    expect(hosts).toMatch(new RegExp(`127\\.0\\.0\\.1 dv-test\\.invalid # dv:bind pid=${child.pid}`))
+
+    parent.kill('SIGKILL')
+    await waitExit(child)
+    expect(await readFile(hostsFile, 'utf8')).toBe('127.0.0.1 localhost\n')
+  })
+
+  it('sweeps stale hosts lines of dead helpers', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'dv-helper-'))
+    children = []
+    const stale = await deadPid()
+    const hostsFile = join(dir, 'etc', 'hosts')
+    await mkdir(join(dir, 'etc'))
+    await writeFile(
+      hostsFile,
+      `127.0.0.1 localhost\n127.0.0.1 old.invalid # dv:bind pid=${stale}\n127.0.0.1 keep.invalid # dv:bind pid=${process.pid}\n`,
+    )
+    const child = spawnHelper([
+      '--proxy-port', '1', '--dns-port', '5353', '--parent-pid', String(process.pid),
+      '--resolver-dir', dir, '--http-port', '0', '--no-flush',
+      '--hosts-fallback', '--hosts-file', hostsFile, 'dv-test.invalid',
+    ])
+    children.push(child)
+    await waitReady(child)
+    const hosts = await readFile(hostsFile, 'utf8')
+    expect(hosts).not.toContain('old.invalid')
+    expect(hosts).toContain('127.0.0.1 keep.invalid')
+    expect(hosts).toContain('127.0.0.1 localhost')
+  })
+})
+
+describe('privileged helper：pid 前缀撞车', () => {
+  let dir: string
+  let children: ChildProcess[]
+
+  afterEach(async () => {
+    for (const child of children) {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+    }
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  it('cleanup removes only the exact-own-pid lines, not prefix-colliding ones', { timeout: 15000 }, async () => {
+    dir = await mkdtemp(join(tmpdir(), 'dv-helper-'))
+    children = []
+    const hostsFile = join(dir, 'etc', 'hosts')
+    await mkdir(join(dir, 'etc'))
+    await writeFile(hostsFile, '127.0.0.1 localhost\n')
+    const parent = spawnFakeParent()
+    const child = spawnHelper([
+      '--proxy-port', '1', '--dns-port', '5353', '--parent-pid', String(parent.pid),
+      '--resolver-dir', dir, '--http-port', '0', '--no-flush',
+      '--hosts-fallback', '--hosts-file', hostsFile, 'dv-test.invalid',
+    ])
+    children.push(child)
+    await waitReady(child)
+    // 前缀撞车：pid=123 的自属标记是 pid=1239 行的子串，子串匹配会误删
+    const colliding = Number(`${child.pid}9`)
+    const { appendFile } = await import('node:fs/promises')
+    await appendFile(hostsFile, `127.0.0.1 other.invalid # dv:bind pid=${colliding}\n`)
+
+    parent.kill('SIGKILL')
+    await waitExit(child)
+    const hosts = await readFile(hostsFile, 'utf8')
+    expect(hosts).not.toContain('dv-test.invalid')
+    expect(hosts).toContain(`pid=${colliding}`)
+    expect(hosts).toContain('127.0.0.1 localhost')
   })
 })

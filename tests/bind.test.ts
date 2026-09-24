@@ -113,6 +113,40 @@ describe('runBind', () => {
     expect(await portIsFree(captured!.proxyPort)).toBe(true)
   })
 
+  it('falls back to hosts mode when resolver verification fails', { timeout: 20000 }, async () => {
+    const warnings: string[] = []
+    const ctx = makeCtx(['app.invalid'])
+    ctx.logger.warn = (msg) => warnings.push(msg)
+    const spawnHelper = vi.fn().mockImplementation(() => Promise.resolve(fakeHelper()))
+    // 第一次尝试（resolver 路径）全部失败、第二次（hosts）成功：
+    // verifyBinding 在窗口内多次轮询，用足够大的失败额度盖住第一次尝试
+    let calls = 0
+    cleanup = await runBind(ctx, {
+      spawnHelper,
+      lookupHost: async () => (++calls <= 10 ? null : '127.0.0.1'),
+      verifyTimeoutMs: 300,
+      verifyIntervalMs: 50,
+    })
+    expect(cleanup).not.toBeNull()
+    expect(spawnHelper).toHaveBeenCalledTimes(2)
+    expect(spawnHelper.mock.calls[0][0].hostsFallback).toBe(false)
+    expect(spawnHelper.mock.calls[1][0].hostsFallback).toBe(true)
+    expect(warnings.some((w) => w.includes('降级'))).toBe(true)
+  })
+
+  it('throws when both resolver and hosts fallback verification fail', { timeout: 20000 }, async () => {
+    const spawnHelper = vi.fn().mockImplementation(() => Promise.resolve(fakeHelper()))
+    await expect(
+      runBind(makeCtx(['app.invalid']), {
+        spawnHelper,
+        lookupHost: async () => null,
+        verifyTimeoutMs: 200,
+        verifyIntervalMs: 50,
+      }),
+    ).rejects.toThrow(/两路/)
+    expect(spawnHelper).toHaveBeenCalledTimes(2)
+  })
+
   it('cleans up and throws when self-verification keeps failing', { timeout: 20000 }, async () => {
     const helper = fakeHelper()
     const spawnHelper = vi.fn().mockResolvedValue(helper)
@@ -141,7 +175,9 @@ describe('run 接线', () => {
     })
     const out = new PassThrough()
     const fixture = fileURLToPath(new URL('./fixtures/basic', import.meta.url))
-    await run('dev', { path: fixture, bind: ['app.invalid'], hooks, stdout: out, stderr: out })
+    // scripts:loaded 先于解析与 spawn 触发：故意用不存在的命令短路掉子进程，
+    // 全量并行下 pnpm spawn 变慢，这个断言不该被 spawn 速度绑架
+    await run('nonexistent-cmd', { path: fixture, bind: ['app.invalid'], hooks, stdout: out, stderr: out })
     expect(seen).toEqual(['app.invalid'])
   })
 })

@@ -10,16 +10,23 @@
  */
 import { createServer, connect, type Socket } from 'node:net'
 import { execFileSync } from 'node:child_process'
-import { writeFileSync, rmSync, fstatSync, mkdirSync } from 'node:fs'
+import { writeFileSync, appendFileSync, readFileSync, readdirSync, rmSync, renameSync, fstatSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+
+/** 自属标记：pid 使清扫能区分活绑定与孤儿残留（helper 被 SIGKILL 走不到清理路径） */
+const MARK_PREFIX = '# dv:bind pid='
+const MARK_RE = /# dv:bind pid=(\d+)/
 
 interface HelperOptions {
   proxyPort: number
   dnsPort: number
   parentPid: number
   resolverDir: string
+  hostsFile: string
   httpPort: number
   flush: boolean
+  /** hosts 降级：不写 resolver，改写 hosts 行（无泛解析能力，子域名不可用） */
+  hostsFallback: boolean
   domains: string[]
 }
 
@@ -34,8 +41,10 @@ function parseArgs(argv: string[]): HelperOptions {
     dnsPort: 0,
     parentPid: 0,
     resolverDir: '/etc/resolver',
+    hostsFile: '/etc/hosts',
     httpPort: 80,
     flush: true,
+    hostsFallback: false,
     domains: [],
   }
   for (let i = 0; i < argv.length; i++) {
@@ -49,13 +58,16 @@ function parseArgs(argv: string[]): HelperOptions {
     else if (arg === '--dns-port') options.dnsPort = Number(takeValue(arg))
     else if (arg === '--parent-pid') options.parentPid = Number(takeValue(arg))
     else if (arg === '--resolver-dir') options.resolverDir = takeValue(arg)
+    else if (arg === '--hosts-file') options.hostsFile = takeValue(arg)
     else if (arg === '--http-port') options.httpPort = Number(takeValue(arg))
     else if (arg === '--no-flush') options.flush = false
+    else if (arg === '--hosts-fallback') options.hostsFallback = true
     else if (arg.startsWith('--')) fail(`未知参数 ${arg}`)
     else options.domains.push(arg)
   }
   if (!Number.isInteger(options.proxyPort) || options.proxyPort <= 0) fail('--proxy-port 非法')
-  if (!Number.isInteger(options.dnsPort) || options.dnsPort <= 0) fail('--dns-port 非法')
+  // hosts 降级模式没有 resolver 文件，dnsPort 无消费者，豁免校验
+  if (!options.hostsFallback && (!Number.isInteger(options.dnsPort) || options.dnsPort <= 0)) fail('--dns-port 非法')
   if (!Number.isInteger(options.parentPid) || options.parentPid <= 0) fail('--parent-pid 非法')
   if (options.domains.length === 0) fail('缺少绑定域名')
   for (const domain of options.domains) {
@@ -83,13 +95,45 @@ function flushDnsCache(): void {
 function writeResolverFiles(options: HelperOptions): string[] {
   mkdirSync(options.resolverDir, { recursive: true })
   const written: string[] = []
-  const content = `nameserver 127.0.0.1\nport ${options.dnsPort}\n# dv:bind\n`
+  const content = `nameserver 127.0.0.1\nport ${options.dnsPort}\n${MARK_PREFIX}${process.pid}\n`
   for (const domain of options.domains) {
     const file = join(options.resolverDir, domain)
     writeFileSync(file, content)
     written.push(file)
   }
   return written
+}
+
+function writeHostsEntries(options: HelperOptions): void {
+  // 追加写而非整文件重写：/etc/hosts 是系统级配置，truncate 语义下写入中途崩溃即数据丢失
+  let existing = ''
+  try {
+    existing = readFileSync(options.hostsFile, 'utf8')
+  } catch {
+    // hosts 文件缺失时按空处理，写入即创建
+  }
+  const lines = options.domains.map((d) => `127.0.0.1 ${d} ${MARK_PREFIX}${process.pid}`)
+  const prefix = existing === '' || existing.endsWith('\n') ? '' : '\n'
+  appendFileSync(options.hostsFile, prefix + lines.join('\n') + '\n')
+}
+
+/** 整文件重写只经 临时文件 + rename：同目录 rename 在 POSIX 下原子，崩溃最坏留下 .tmp 而非半截 hosts */
+function rewriteHostsFile(hostsFile: string, kept: string[]): void {
+  const tmp = `${hostsFile}.dv-${process.pid}.tmp`
+  writeFileSync(tmp, kept.join('\n'))
+  renameSync(tmp, hostsFile)
+}
+
+function removeHostsEntries(options: HelperOptions): void {
+  try {
+    const kept = readFileSync(options.hostsFile, 'utf8')
+      .split('\n')
+      // 提取数字后严格相等比较：子串匹配会让短 pid 命中长 pid 前缀，误删别的活实例的行
+      .filter((line) => Number(line.match(MARK_RE)?.[1]) !== process.pid)
+    rewriteHostsFile(options.hostsFile, kept)
+  } catch {
+    // hosts 文件被外部移除等，清理尽力而为
+  }
 }
 
 function removeResolverFiles(files: string[]): void {
@@ -100,6 +144,46 @@ function removeResolverFiles(files: string[]): void {
     } catch {
       // 文件可能已被并发的后继 helper 处理，清理尽力而为
     }
+  }
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // EPERM 表示进程存在但无权限发信号，仍是活进程
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/**
+ * 孤儿清扫：标记里 pid 已死的绑定残留（helper 被 SIGKILL 时 watchdog 没机会跑）。
+ * 只动带自属标记且 pid 已死的项，外来文件与活绑定一律不碰。
+ */
+function sweepStale(options: HelperOptions): void {
+  try {
+    for (const file of readdirSync(options.resolverDir)) {
+      const path = join(options.resolverDir, file)
+      try {
+        const match = readFileSync(path, 'utf8').match(MARK_RE)
+        if (match && !isAlive(Number(match[1]))) rmSync(path)
+      } catch {
+        // 单个文件读删失败不阻断整体清扫
+      }
+    }
+  } catch {
+    // resolver 目录不存在即无孤儿
+  }
+  try {
+    const lines = readFileSync(options.hostsFile, 'utf8').split('\n')
+    const kept = lines.filter((line) => {
+      const match = line.match(MARK_RE)
+      return !match || isAlive(Number(match[1]))
+    })
+    if (kept.length !== lines.length) rewriteHostsFile(options.hostsFile, kept)
+  } catch {
+    // hosts 缺失同样无孤儿
   }
 }
 
@@ -196,17 +280,23 @@ async function main(): Promise<void> {
   // 管道就绪先于系统变更：listen 错误是异步的，写文件必须等 listen 落定，
   // 否则 EADDRINUSE 会把指向死端口的 resolver 文件留在系统里
   const { sockets, port } = await startDumbPipe(options).catch((error: Error) => fail(error.message))
+  sweepStale(options)
   let written: string[] = []
   try {
-    written = writeResolverFiles(options)
+    if (options.hostsFallback) writeHostsEntries(options)
+    else written = writeResolverFiles(options)
     if (options.flush) flushDnsCache()
   } catch (error) {
     removeResolverFiles(written)
-    fail(`写 resolver 文件失败：${(error as Error).message}`)
+    fail(`写绑定配置失败：${(error as Error).message}`)
+  }
+  const cleanupFiles = () => {
+    removeResolverFiles(written)
+    if (options.hostsFallback) removeHostsEntries(options)
   }
   process.stdout.write(`READY ${port}\n`)
   armWatchdog(options, () => {
-    removeResolverFiles(written)
+    cleanupFiles()
     for (const socket of sockets) socket.destroy()
     if (options.flush) flushDnsCache()
   })

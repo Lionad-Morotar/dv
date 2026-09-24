@@ -14,10 +14,14 @@ export interface SpawnHelperOptions {
   parentPid?: number
   /** 默认 /etc/resolver；测试注入 tmpdir */
   resolverDir?: string
+  /** 默认 /etc/hosts；测试注入 tmpdir 内文件 */
+  hostsFile?: string
   /** 默认 80；测试注入 ephemeral（0 表示系统分配） */
   httpPort?: number
   /** 默认 true；注入路径下 dscacheutil/killall 无需执行 */
   flush?: boolean
+  /** resolver 失效时的降级：改写 hosts 行（无泛解析，子域名不生效） */
+  hostsFallback?: boolean
   /** 默认 ['sudo', process.execPath]；测试注入去掉 sudo 的直起命令 */
   command?: string[]
 }
@@ -50,8 +54,10 @@ export async function spawnBindHelper(options: SpawnHelperOptions): Promise<Bind
     '--dns-port', String(options.dnsPort),
     '--parent-pid', String(options.parentPid ?? process.pid),
     '--resolver-dir', options.resolverDir ?? '/etc/resolver',
+    '--hosts-file', options.hostsFile ?? '/etc/hosts',
     '--http-port', String(options.httpPort ?? 80),
     ...(options.flush === false ? ['--no-flush'] : []),
+    ...(options.hostsFallback ? ['--hosts-fallback'] : []),
     ...options.domains,
   ]
 

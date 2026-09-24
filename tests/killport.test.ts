@@ -35,6 +35,8 @@ describe('kp plugin integration', () => {
       const hooks = createHooks<DvHooks>()
       const configPath = await freshConfigPath()
       await setPluginEnabled(configPath, 'kp', false)
+      // bind 同为内置插件，一并禁用才能让 mounted 为空（它不带 --bind 时本就不介入）
+      await setPluginEnabled(configPath, 'bind', false)
       const mounted = await registerPlugins(hooks, BUILTIN_PLUGINS, configPath)
       expect(mounted).toEqual([])
 
