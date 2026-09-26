@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-26
+
+### Added
+
+- `dv dev --bind <domain>` 域名绑定：dev script 启动时把域名（含全部子域）绑到本地 dev server，浏览器直接访问 `http://<domain>` 免端口直达。机制为 `/etc/resolver` 按域解析路由 + 内嵌 DNS 应答器 + 一次性 sudo 拉起的 root 哑管道接管 `:80` + 内嵌代理重写 Host/Origin 后转发——vite 系框架的 Host 与 WebSocket Origin 校验零配置通过。绑定随 dv 进程生死：正常退出显式清理，崩溃或强杀由 helper watchdog 自清，孤儿残留凭自属标记由下次绑定清扫。解析未生效时自动降级 `/etc/hosts` 逐名绑定并警告（降级模式无泛子域）；可重复传参绑多个域。限制：HSTS 预加载域（如 `*.dev`、`*.app`）浏览器强制 https 不适用；绑定期间真实站点在本机不可达（绑定时有提示）
+
+### Changed
+
+- Node 版本要求抬升至 >= 22（DNS 应答器依赖的引擎要求），Node 20 及以下请留在 0.1.x
+
 ## [0.1.4] - 2026-07-30
 
 ### Added
