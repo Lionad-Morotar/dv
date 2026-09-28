@@ -9,9 +9,10 @@
  * 或父 pid 消失），不会把 resolver 文件遗留在系统里。
  */
 import { createServer, connect, type Socket } from 'node:net'
+import { createServer as createTlsServer, type TlsOptions } from 'node:tls'
 import { execFileSync } from 'node:child_process'
-import { writeFileSync, appendFileSync, readFileSync, readdirSync, rmSync, renameSync, fstatSync, mkdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { writeFileSync, appendFileSync, readFileSync, readdirSync, rmSync, renameSync, fstatSync, mkdirSync, unlinkSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 
 /** 自属标记：pid 使清扫能区分活绑定与孤儿残留（helper 被 SIGKILL 走不到清理路径） */
 const MARK_PREFIX = '# dv:bind pid='
@@ -28,6 +29,15 @@ interface HelperOptions {
   /** hosts 降级：不写 resolver，改写 hosts 行（无泛解析能力，子域名不可用） */
   hostsFallback: boolean
   domains: string[]
+  /** TLS 终结端口；null = 未启用（与 --http-port 缺省语义区分：显式传参才启用） */
+  tlsPort: number | null
+  /** leaf 证书/私钥 staging 文件：读入内存后立即删除，staging 目录一并清理 */
+  certFile: string | null
+  keyFile: string | null
+  /** dv 持久 CA 证书：装入系统信任链用（mkcert 模式，用户已在会话中批准） */
+  caFile: string | null
+  /** 信任安装开关；测试禁用，真机默认执行 */
+  trustInstall: boolean
 }
 
 function fail(message: string): never {
@@ -46,6 +56,11 @@ function parseArgs(argv: string[]): HelperOptions {
     flush: true,
     hostsFallback: false,
     domains: [],
+    tlsPort: null,
+    certFile: null,
+    keyFile: null,
+    caFile: null,
+    trustInstall: true,
   }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
@@ -60,7 +75,12 @@ function parseArgs(argv: string[]): HelperOptions {
     else if (arg === '--resolver-dir') options.resolverDir = takeValue(arg)
     else if (arg === '--hosts-file') options.hostsFile = takeValue(arg)
     else if (arg === '--http-port') options.httpPort = Number(takeValue(arg))
+    else if (arg === '--tls-port') options.tlsPort = Number(takeValue(arg))
+    else if (arg === '--cert-file') options.certFile = takeValue(arg)
+    else if (arg === '--key-file') options.keyFile = takeValue(arg)
+    else if (arg === '--ca-file') options.caFile = takeValue(arg)
     else if (arg === '--no-flush') options.flush = false
+    else if (arg === '--no-trust-install') options.trustInstall = false
     else if (arg === '--hosts-fallback') options.hostsFallback = true
     else if (arg.startsWith('--')) fail(`未知参数 ${arg}`)
     else options.domains.push(arg)
@@ -75,6 +95,12 @@ function parseArgs(argv: string[]): HelperOptions {
     // 长度上限取 DNS 规范的 253，保证 writeFileSync 不会在路上 ENAMETOOLONG
     if (domain.length > 253 || !/^(?!-)[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(domain)) fail(`域名非法：${domain}`)
   }
+  if (options.tlsPort !== null && (!Number.isInteger(options.tlsPort) || options.tlsPort < 0)) fail('--tls-port 非法')
+  const tlsEnabled = options.tlsPort !== null
+  if (tlsEnabled && (!options.certFile || !options.keyFile)) fail('--tls-port 需要 --cert-file 与 --key-file')
+  // 证书参数无 TLS 消费者即误用，严格拒绝避免静默无效
+  if (!tlsEnabled && (options.certFile || options.keyFile || options.caFile)) fail('证书参数须与 --tls-port 搭配')
+  if (tlsEnabled && options.trustInstall && !options.caFile) fail('--tls-port 的信任安装需要 --ca-file')
   return options
 }
 
@@ -187,29 +213,34 @@ function sweepStale(options: HelperOptions): void {
   }
 }
 
+/** 双向字节管道：连接两端即弃式转发，任一侧出错整体 drop（:80 与 TLS 终结共用） */
+function pipeBytes(client: Socket, upstreamPort: number, sockets: Socket[]): void {
+  // connect 立即返回 socket，连接建立前 pipe 的写入会被缓冲——哑管道无需等上游就绪
+  const upstream = connect(upstreamPort, '127.0.0.1')
+  client.pipe(upstream)
+  upstream.pipe(client)
+  sockets.push(client, upstream)
+  const drop = () => {
+    for (const socket of [client, upstream]) socket.destroy()
+  }
+  client.on('error', drop)
+  upstream.on('error', drop)
+  client.on('close', () => sockets.splice(sockets.indexOf(client), 1))
+  upstream.on('close', () => sockets.splice(sockets.indexOf(upstream), 1))
+}
+
 /** :80 → dv 内嵌代理的哑 TCP 管道；只搬运字节，不理解 HTTP */
-async function startDumbPipe(options: HelperOptions): Promise<{ sockets: Socket[]; port: number }> {
-  const sockets: Socket[] = []
+async function startDumbPipe(options: HelperOptions, sockets: Socket[]): Promise<number> {
   const server = createServer({ allowHalfOpen: true }, (client: Socket) => {
     // allowHalfOpen：客户端 FIN（写完请求体等响应）后其可读侧仍须保留，
     // 否则默认语义会连写回响应的通道一并掐断
-    // connect 立即返回 socket，连接建立前 pipe 的写入会被缓冲——哑管道无需等上游就绪
-    const upstream = connect(options.proxyPort, '127.0.0.1')
-    client.pipe(upstream)
-    upstream.pipe(client)
-    sockets.push(client, upstream)
-    const drop = () => {
-      for (const socket of [client, upstream]) socket.destroy()
-    }
-    client.on('error', drop)
-    upstream.on('error', drop)
-    client.on('close', () => sockets.splice(sockets.indexOf(client), 1))
-    upstream.on('close', () => sockets.splice(sockets.indexOf(upstream), 1))
+    pipeBytes(client, options.proxyPort, sockets)
   })
   const port = await new Promise<number>((resolvePromise, rejectPromise) => {
     server.on('error', (error: NodeJS.ErrnoException) => {
       if (error.code === 'EADDRINUSE') {
         rejectPromise(new Error(`:${options.httpPort} 被占用——绑定的域必须走 80 端口才能免端口访问`))
+        return
       }
       rejectPromise(new Error(`监听失败：${error.message}`))
     })
@@ -222,7 +253,70 @@ async function startDumbPipe(options: HelperOptions): Promise<{ sockets: Socket[
       resolvePromise(address.port)
     })
   })
-  return { sockets, port }
+  return port
+}
+
+/**
+ * :443 TLS 终结管道：终结后仍是哑字节管道（复用 pipeBytes）。ALPN 必须显式钉在
+ * http/1.1——浏览器默认协商 h2，终结出的明文会变成 HTTP/2 帧而 http-proxy-3 只懂
+ * HTTP/1.1；完全不协商 ALPN 则 Chrome 直接报 no_application_protocol 失败。
+ */
+async function startTlsPipe(options: HelperOptions, sockets: Socket[], cert: string, key: string): Promise<number> {
+  const server = createTlsServer(
+    { cert, key, ALPNProtocols: ['http/1.1'], allowHalfOpen: true } satisfies TlsOptions,
+    (client: Socket) => {
+      pipeBytes(client, options.proxyPort, sockets)
+    },
+  )
+  // 畸形 TLS 握手（端口扫描、curl -k 误用等）触发 tlsClientError，吞掉防崩 helper
+  server.on('tlsClientError', () => {})
+  const port = await new Promise<number>((resolvePromise, rejectPromise) => {
+    server.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EADDRINUSE') {
+        rejectPromise(new Error(`:${options.tlsPort} 被占用——绑定域的 https 必须走 443 端口才能免端口访问`))
+        return
+      }
+      rejectPromise(new Error(`TLS 监听失败：${error.message}`))
+    })
+    server.listen(options.tlsPort ?? 0, '127.0.0.1', () => {
+      const address = server.address()
+      if (address === null || typeof address === 'string') {
+        rejectPromise(new Error('无法获取 TLS 监听端口'))
+        return
+      }
+      resolvePromise(address.port)
+    })
+  })
+  return port
+}
+
+/** leaf 材料读入内存后立即删除文件与 staging 目录：root 进程不留证书私钥落盘痕迹 */
+async function loadAndDisposeMaterial(options: HelperOptions): Promise<{ cert: string; key: string }> {
+  const cert = readFileSync(options.certFile!, 'utf8')
+  const key = readFileSync(options.keyFile!, 'utf8')
+  unlinkSync(options.certFile!)
+  unlinkSync(options.keyFile!)
+  rmSync(dirname(options.certFile!), { recursive: true, force: true })
+  return { cert, key }
+}
+
+/**
+ * CA 装入系统信任链（mkcert 模式）：root 写 System keychain，Chrome/Safari 即受信。
+ * 失败只降级不阻断——resolver 绑定主路径不受影响，https 退化为证书警告并留提示。
+ */
+function installTrustedCa(caFile: string): void {
+  try {
+    execFileSync(
+      'security',
+      ['add-trusted-cert', '-d', '-r', 'trustRoot', '-k', '/Library/Keychains/System.keychain', caFile],
+      { stdio: 'ignore' },
+    )
+  } catch (error) {
+    process.stderr.write(
+      `dv-bind-helper: CA 信任安装失败（${(error as Error).message.split('\n')[0]}）——https 证书将不受浏览器信任，` +
+        '可手动执行: security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain <ca.crt>\n',
+    )
+  }
 }
 
 /**
@@ -277,9 +371,17 @@ function armWatchdog(options: HelperOptions, cleanup: () => void): void {
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2))
+  const sockets: Socket[] = []
   // 管道就绪先于系统变更：listen 错误是异步的，写文件必须等 listen 落定，
   // 否则 EADDRINUSE 会把指向死端口的 resolver 文件留在系统里
-  const { sockets, port } = await startDumbPipe(options).catch((error: Error) => fail(error.message))
+  const port = await startDumbPipe(options, sockets).catch((error: Error) => fail(error.message))
+  // TLS 管道同样先于系统变更启动；材料读后即删，端口回报在 READY 前（启动器只解析 READY 行）
+  if (options.tlsPort !== null) {
+    // 读删失败（staging 被启动器超时清理等）与其他 listen 失败同走 fail 契约，不裸抛堆栈
+    const material = await loadAndDisposeMaterial(options).catch((error: Error) => fail(error.message))
+    const tlsPort = await startTlsPipe(options, sockets, material.cert, material.key).catch((error: Error) => fail(error.message))
+    process.stdout.write(`TLS ${tlsPort}\n`)
+  }
   sweepStale(options)
   let written: string[] = []
   try {
@@ -290,6 +392,7 @@ async function main(): Promise<void> {
     removeResolverFiles(written)
     fail(`写绑定配置失败：${(error as Error).message}`)
   }
+  if (options.tlsPort !== null && options.trustInstall) installTrustedCa(options.caFile!)
   const cleanupFiles = () => {
     removeResolverFiles(written)
     if (options.hostsFallback) removeHostsEntries(options)
