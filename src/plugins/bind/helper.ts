@@ -24,6 +24,15 @@ export interface SpawnHelperOptions {
   hostsFallback?: boolean
   /** 默认 ['sudo', process.execPath]；测试注入去掉 sudo 的直起命令 */
   command?: string[]
+  /** 默认不传（不启用）；编排层生产恒传 443（测试注入 ephemeral） */
+  tlsPort?: number
+  /** leaf 证书/私钥 staging 文件（tlsPort 启用时必传） */
+  certPath?: string
+  keyPath?: string
+  /** dv 持久 CA 证书路径（信任安装用，tlsPort 启用时必传） */
+  caPath?: string
+  /** 默认 true；测试禁用 */
+  trustInstall?: boolean
 }
 
 export interface BindHelper {
@@ -56,6 +65,14 @@ export async function spawnBindHelper(options: SpawnHelperOptions): Promise<Bind
     '--resolver-dir', options.resolverDir ?? '/etc/resolver',
     '--hosts-file', options.hostsFile ?? '/etc/hosts',
     '--http-port', String(options.httpPort ?? 80),
+    ...(options.tlsPort === undefined
+      ? []
+      : [
+          '--tls-port', String(options.tlsPort),
+          '--cert-file', options.certPath ?? '',
+          '--key-file', options.keyPath ?? '',
+          ...(options.trustInstall === false ? ['--no-trust-install'] : ['--ca-file', options.caPath ?? '']),
+        ]),
     ...(options.flush === false ? ['--no-flush'] : []),
     ...(options.hostsFallback ? ['--hosts-fallback'] : []),
     ...options.domains,
