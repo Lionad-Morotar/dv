@@ -6,13 +6,15 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-28
+
 ### Added
 
-- bind 支持 https：root helper 在 `:443` 新增 TLS 终结管道（ALPN 钉 http/1.1），证书由 dv 自管 CA 签发。首次绑定自动创建本地 CA（EC P-256、十年期，存 `~/Library/Application Support/dv/ca/`）并经 root helper 以 `security add-trusted-cert` 幂等装入系统信任链（Chrome/Safari 直接受信；Firefox 需手动信任 `ca.crt`）；leaf 证书每次绑定现签（SAN 含绑定域与一级泛子域，一年期）。`*.dev`、`*.app` 等 TLD 级 HSTS 预加载域浏览器强制 https，旧版 http 绑定对其不可用，本版起以受信 TLS 覆盖。信任安装失败仅降级告警，不影响 resolver 绑定主路径；leaf 材料读后即删，失败路径（DNS/代理启动失败、降级重试）均有 staging 清理
+- bind 支持 https：绑定域（含一级泛子域）浏览器可直接 `https://` 免端口访问，`.dev`、`.app` 等强制 https 的域名不再被排除在外。首次绑定自动创建本地 CA 并装入系统信任链（Chrome/Safari 直接受信，Firefox 需手动信任 CA 证书文件），证书材料用后即删；信任安装失败仅提示，不影响 http 绑定主路径
 
 ### Changed
 
-- bind 成功日志从 `http://<domain>` 改为 `http(s)://<domain>` 形态
+- bind 成功提示从 `http://<域名>` 改为 `http(s)://<域名>` 形态
 
 ## [0.2.0] - 2026-09-26
 
