@@ -4,6 +4,8 @@
   "scripts": {
     "dev": "echo ROOT_DEV",
     "dev:filtered": "pnpm --filter @test/web dev",
+    "dev:aliased": "pnpm dev:filtered",
+    "dev:aliased-ghost": "pnpm dev:ghost",
     "dev:chdir": "pnpm -C packages/web dev",
     "dev:app": "pnpm --filter @test/app dev",
     "dev:cfg": "pnpm --filter @test/cfg dev",
@@ -13,7 +15,8 @@
   "dv": {
     "killport": {
       "dev:dlg": 54008,
-      "dev:ghost": 54004
+      "dev:ghost": 54004,
+      "dev:aliased-ghost": 54009
     }
   }
 }
