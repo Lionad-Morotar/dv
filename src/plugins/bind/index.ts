@@ -7,6 +7,7 @@ import type { DvPlugin } from '../types.ts'
 import { startDnsResponder } from './dns.ts'
 import { spawnBindHelper, type BindHelper, type SpawnHelperOptions } from './helper.ts'
 import { startBindProxy } from './proxy.ts'
+import { issueLeafCertificate, loadOrCreateCa, type CaMaterial, type CertModuleDeps, type LeafMaterial } from './cert.ts'
 
 export type BindCleanup = () => Promise<void>
 
@@ -17,6 +18,13 @@ export interface BindDeps {
   lookupHost?: (domain: string) => Promise<string | null>
   verifyTimeoutMs?: number
   verifyIntervalMs?: number
+  /** 默认 ~/Library/Application Support/dv/ca；测试注入 tmpdir */
+  caDir?: string
+  /** leaf staging 的 tmp 根目录；测试注入隔离 */
+  tmpDir?: string
+  /** 默认真实实现；测试注入桩避免触碰真实 CA 存储 */
+  loadCa?: typeof loadOrCreateCa
+  issueLeaf?: typeof issueLeafCertificate
 }
 
 /**
@@ -70,15 +78,22 @@ export async function runBind(ctx: DvHookContext, deps: BindDeps = {}): Promise<
     )
   }
 
+  // CA 只加载一次，leaf 每次绑定尝试现签（helper 读后即删材料，降级重试需重新出料）
+  const certDeps: CertModuleDeps = { caDir: deps.caDir, tmpDir: deps.tmpDir }
+  const ca = await (deps.loadCa ?? loadOrCreateCa)(certDeps)
+  if (ca.created) {
+    ctx.logger.info(`bind: 已创建本地 CA（${ca.certPath}），即将装入系统信任链`)
+  }
+
   // 主路径：/etc/resolver + 内嵌 DNS，泛子域可用
-  const primary = await attemptBind(ctx, port, domains, deps, false)
+  const primary = await attemptBind(ctx, port, domains, deps, false, ca, certDeps)
   if (primary) return primary
 
   // resolver 未生效（如 macOS 26 对私有 TLD 的 mDNSResponder 回归）→ hosts 逐名降级
   ctx.logger.warn(
     `bind: resolver 自验证未通过，降级为 /etc/hosts 绑定——泛子域名（如 app.${domains[0]}）在降级模式下不可用`,
   )
-  const fallback = await attemptBind(ctx, port, domains, deps, true)
+  const fallback = await attemptBind(ctx, port, domains, deps, true, ca, certDeps)
   if (fallback) return fallback
   throw new DvError(
     `bind: 自验证失败——${domains.join('、')} 经 resolver 与 hosts 两路均未解析到 127.0.0.1`,
@@ -92,16 +107,21 @@ async function attemptBind(
   domains: string[],
   deps: BindDeps,
   hostsFallback: boolean,
+  ca: CaMaterial,
+  certDeps: CertModuleDeps,
 ): Promise<BindCleanup | null> {
+  const leaf: LeafMaterial = await (deps.issueLeaf ?? issueLeafCertificate)(ca, domains, certDeps)
   // hosts 降级下解析由 /etc/hosts 完成，DNS 应答器没有消费者，不必空转
   const dns = hostsFallback
     ? null
     : await startDnsResponder(domains, { logger: ctx.logger }).catch((error: Error) => {
+        leaf.cleanup()
         throw new DvError(`bind: DNS 应答器启动失败——${error.message}`)
       })
   const proxy = await startBindProxy(port, { logger: ctx.logger }).catch(async (error: Error) => {
     // 代理失败时 DNS 已起，必须一并回滚——半启动状态只能靠进程退出兜底，太脏
     await dns?.close()
+    leaf.cleanup()
     throw new DvError(`bind: 代理启动失败——${error.message}`)
   })
   const spawnHelper = deps.spawnHelper ?? spawnBindHelper
@@ -109,11 +129,21 @@ async function attemptBind(
   const teardown = async (helper?: BindHelper) => {
     helper?.stop()
     await Promise.all([dns?.close(), proxy.close()])
+    leaf.cleanup()
   }
 
   let helper: BindHelper
   try {
-    helper = await spawnHelper({ proxyPort: proxy.port, dnsPort: dns?.port ?? 0, domains, hostsFallback })
+    helper = await spawnHelper({
+      proxyPort: proxy.port,
+      dnsPort: dns?.port ?? 0,
+      domains,
+      hostsFallback,
+      tlsPort: 443,
+      certPath: leaf.certPath,
+      keyPath: leaf.keyPath,
+      caPath: ca.certPath,
+    })
   } catch (error) {
     await teardown()
     throw error
@@ -130,7 +160,7 @@ async function attemptBind(
     return null
   }
 
-  ctx.logger.info(`bind: ${domains.map((d) => `http://${d}`).join(' ')} → 127.0.0.1:${port}`)
+  ctx.logger.info(`bind: ${domains.map((d) => `http(s)://${d}`).join(' ')} → 127.0.0.1:${port}`)
   // 绑定期间本机对该域的解析被劫持，真实站点不可达——对真实域名绑定必须显式告知
   ctx.logger.warn(`bind: 绑定期间 ${domains.join('、')} 的真实站点在本机不可访问`)
   return () => teardown(helper)
