@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- kp 同包 pnpm script alias 再穿透到子包 config：根 script 写成 `pnpm <local-script>`（如 use-scrollbar 的 `dev` → `pnpm dev:playground` → `pnpm --filter …`）时，此前只在根目录搜 vite.config，会误报 `no port detected`；现在用委托文本重解 `--filter/-C` 目录并最多再读一层子包 script，filter 失败仍整链跳过不回落根包
+
 ## [0.2.2] - 2026-09-28
 
 ### Added

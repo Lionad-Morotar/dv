@@ -56,6 +56,42 @@ describe('kp config extraction', () => {
     expect((await exited).signal).toBe('SIGTERM')
   }, 20000)
 
+  it.skipIf(!hasPnpm)('follows same-package pnpm script alias into --filter package config', async () => {
+    // 镜像 use-scrollbar：根 `dev` = `pnpm dev:playground` → 再 `pnpm --filter …`，
+    // 端口只在子包 vite.config；旧链停在根目录搜 config → no port
+    const child = await occupyPort(MONO_PORT)
+    const exited = exitOf(child)
+
+    const out = new CaptureStream()
+    const hooks = createHooks<DvHooks>()
+    await registerPlugins(hooks, BUILTIN_PLUGINS, await freshConfigPath())
+
+    const code = await run('dev:aliased', { path: monorepo, hooks, stdout: out, stderr: out })
+
+    expect(code).toBe(0)
+    expect(out.text).toContain('WEB_RAN')
+    expect(out.text).toContain(`kp: killed pid ${child.pid} on port ${MONO_PORT}`)
+    expect((await exited).signal).toBe('SIGTERM')
+  }, 20000)
+
+  it.skipIf(!hasPnpm)('does not fall back to root config or declared port when alias targets a failed --filter', async () => {
+    // alias→ghost：委托文本含 --filter 且包名无匹配 → 整链跳过，
+    // 不得回落根 vite.config(53998) 或 dv.killport.dev:aliased-ghost(54009)
+    const child = await occupyPort(ROOT_CONFIG_PORT)
+    try {
+      const out = new CaptureStream()
+      const hooks = createHooks<DvHooks>()
+      await registerPlugins(hooks, BUILTIN_PLUGINS, await freshConfigPath())
+
+      await run('dev:aliased-ghost', { path: monorepo, hooks, stdout: out, stderr: out })
+
+      expect(out.text).toContain('kp: no port detected, skipping')
+      expect(child.exitCode).toBeNull()
+    } finally {
+      child.kill('SIGTERM')
+    }
+  }, 20000)
+
   it.skipIf(!hasPnpm)('penetrates pnpm -C into the subdirectory config', async () => {
     const child = await occupyPort(MONO_PORT)
     const exited = exitOf(child)

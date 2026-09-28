@@ -36,12 +36,17 @@ dv build --mode build
 dv dev --bind app.example.com
 ```
 
-把域名绑到 dev server：`/etc/resolver/<domain>` 把该域（含全部子域）的解析引到 dv 内嵌的 DNS 应答器（答 `127.0.0.1`），root helper 在 `:80`/`:443` 起哑管道（`:443` 为 TLS 终结，证书来自 dv 自管 CA）接到 dv 内嵌代理，代理把 `Host`/`Origin` 重写为 `127.0.0.1:<port>` 后转发——浏览器访问 `http(s)://app.example.com` 均免端口直达、过框架 Host 校验。
+把域名绑到 dev server：`/etc/resolver/<domain>` 把该域（含全部子域）的解析引到 dv 内嵌的 DNS 应答器（答 `127.0.0.1`），root helper 在 `:80`/`:443` 起哑管道（
+`:443` 为 TLS 终结，证书来自 dv 自管 CA）接到 dv 内嵌代理，代理把 `Host`/`Origin` 重写为 `127.0.0.1:<port>` 后转发——
+浏览器访问 `http(s)://app.example.com` 均免端口直达、过框架 Host 校验。
 
 - 需要一次 sudo（`/etc/resolver`、`:80` 与 `:443` 是特权资源）；helper 只做 TLS 终结、哑管道与文件写入，不含 HTTP/DNS 解析逻辑
-- 系统代理兼容：系统代理开启时（如 Clash Verge 全量接管 HTTPS），代理会用自身 DNS 解析绑定域并因公网解析不存在而掐断隧道；bind 启动时自动把绑定域加入 macOS 系统代理例外列表（免 sudo），退出时移除，崩溃残留由下次绑定清扫。注入失败仅警告不阻断绑定。限制：PAC 模式例外列表不生效，会提示在代理工具侧手动绕过；Clash Verge 等工具重设系统代理时以自身配置覆盖例外列表，长期使用请把绑定域加进代理工具的绕过设置
-- https 证书由 dv 自管 CA（mkcert 模式）签发：首次绑定自动创建 CA（EC P-256、十年期，存 `~/Library/Application Support/dv/ca/`）并装入系统信任链（幂等，每次绑定重装）；leaf 证书每次绑定现签（SAN 含绑定域与一级泛子域，一年期）。限制：Firefox 使用自身 NSS 信任链、不读系统钥匙串，需手动信任 `<caDir>/ca.crt`
-- 绑定随 dv 进程生死：正常退出显式清理；dv 崩溃或被 `SIGKILL` 时 helper 的 watchdog（父进程心跳 + pid 复用钉 + stdin EOF）自清；helper 被强杀的残留由下一次绑定的孤儿清扫回收（凭 `# dv:bind pid=N` 标记）
+- 系统代理兼容：系统代理开启时（如 Clash Verge 全量接管 HTTPS），代理会用自身 DNS 解析绑定域并因公网解析不存在而掐断隧道；bind 启动时自动把绑定域加入 macOS 系统代理例外列表（免 sudo），退出时移除，
+  崩溃残留由下次绑定清扫。注入失败仅警告不阻断绑定。限制：PAC 模式例外列表不生效，会提示在代理工具侧手动绕过；Clash Verge 等工具重设系统代理时以自身配置覆盖例外列表，长期使用请把绑定域加进代理工具的绕过设置
+- https 证书由 dv 自管 CA（mkcert 模式）签发：首次绑定自动创建 CA（EC P-256、十年期，存 `~/Library/Application Support/dv/ca/`）并装入系统信任链（幂等，每次绑定重装）；
+  leaf 证书每次绑定现签（SAN 含绑定域与一级泛子域，一年期）。限制：Firefox 使用自身 NSS 信任链、不读系统钥匙串，需手动信任 `<caDir>/ca.crt`
+- 绑定随 dv 进程生死：正常退出显式清理；dv 崩溃或被 `SIGKILL` 时 helper 的 watchdog（父进程心跳 + pid 复用钉 + stdin EOF）自清；helper 被强杀的残留由下一次绑定的孤儿清扫回收（
+  凭 `# dv:bind pid=N` 标记）
 - 自验证失败（如系统 DNS 策略拦截 resolver）自动降级为 `/etc/hosts` 逐名绑定并警告——降级模式不支持泛子域
 - 可重复传参绑多个域：`dv dev --bind a.example.com --bind b.example.com`
 - 注意 HSTS：预加载 HSTS 的域（如 `*.dev`、`*.app` 全域）浏览器强制 https，本功能以受信 TLS 覆盖，`https://` 直接可用；站点自带 HSTS 头的场景同样走该受信链路
@@ -93,8 +98,9 @@ dev script 执行前清场目标端口上的监听进程（SIGTERM，不升级 S
 端口来源按优先级：
 
 1. script 文本显式端口：`--port 3001` > `PORT=3001` > 框架上下文 `-p 3001`（仅当 script 含 nuxt/vite/astro/next 等框架命令时，`-p` 才解释为端口）
-2. 委托 script 显式端口：script 为 `pnpm -C <dir>` / `pnpm --filter <pkg>` 委托命令时，穿透到目标包读取被委托 script 的命令文本，按第 1 条规则解析（
-   如根 script `pnpm --filter web dev` → 子包 `dev: nuxt dev --port 2350` → 2350）
+2. 委托 script 显式端口：script 为 `pnpm -C <dir>` / `pnpm --filter <pkg>`，或同包 alias `pnpm <local-script>` 其目标再委托到 `-C/--filter` 时，穿透到目标包读取被委托 script 的命令文本，按第 1 条规则解析（
+   如根 script `pnpm --filter web dev` → 子包 `dev: nuxt dev --port 2350` → 2350；
+   又如 `dev: pnpm dev:playground` → `dev:playground: pnpm --filter playground dev` → 子包 config）
 3. 项目级显式声明：package.json 的 `dv.killport.<scriptName>`。为命令行无端口、无框架 config 的 script（如 `cd backend && air`——端口藏在运行时 env 里）
    提供可信来源；按解析后的全 script 名匹配，畸形值 warn 并视为未声明
 4. 框架 config 静态提取：`vite.config.*` / `astro.config.*` / `rsbuild.config.*` 的 `server.port`，
@@ -114,11 +120,12 @@ dev script 执行前清场目标端口上的监听进程（SIGTERM，不升级 S
 ```
 
 monorepo 支持：script 为 `pnpm -C <dir>` / `pnpm --filter <pkg>` 时，委托 script 与 config 的搜索目录均穿透到子包（
-`--filter` 经 pnpm-workspace.yaml 包名映射）。`--filter` 包名无匹配视为委托失败，整条解析链跳过（不回落根包搜索），杜绝从无关实体提取端口而错杀。
+`--filter` 经 pnpm-workspace.yaml 包名映射）。同包 alias（`pnpm <local-script>`）若目标再委托到 `-C/--filter`，会再穿透一跳到子包搜 config（最多两跳 script 文本，不递归更深）。`--filter` 包名无匹配视为委托失败，整条解析链跳过（不回落根包搜索），杜绝从无关实体提取端口而错杀。
 
 ### bind（内置）
 
-`--bind` 传入时激活：dev script 启动前完成域名绑定（机制见上文「域名绑定」），script 退出后清理。与 kp 共用同一条端口解析链；解析不到端口时报错而非跳过——`--bind` 是显式诉求，静默失效不可接受。可用 `dv plugins disable bind` 关闭。
+`--bind` 传入时激活：dev script 启动前完成域名绑定（机制见上文「域名绑定」），script 退出后清理。与 kp 共用同一条端口解析链；解析不到端口时报错而非跳过——`--bind` 是显式诉求，静默失效不可接受。
+可用 `dv plugins disable bind` 关闭。
 
 ## 开发
 
