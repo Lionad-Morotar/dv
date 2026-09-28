@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { createServer } from 'node:net'
 import { createSocket } from 'node:dgram'
 import { PassThrough } from 'node:stream'
@@ -10,6 +10,7 @@ import { DvError } from '../src/core/pkg.ts'
 import type { DvHookContext, DvHooks } from '../src/core/hooks.ts'
 import { run } from '../src/run.ts'
 import { runBind, type BindCleanup } from '../src/plugins/bind/index.ts'
+import type { SysProxyHooks } from '../src/plugins/bind/sysproxy.ts'
 import type { BindHelper } from '../src/plugins/bind/helper.ts'
 
 function makeCtx(bind: string[] | undefined, scriptText = 'vite --port 55999'): DvHookContext {
@@ -47,6 +48,16 @@ async function portIsFree(port: number): Promise<boolean> {
   })
 }
 
+/** 系统代理零操作桩：不触碰真机 scutil/networksetup，供与代理编排无关的既有用例隔离 */
+function noSysProxy(): SysProxyHooks {
+  return {
+    sweep: vi.fn().mockResolvedValue(undefined),
+    detect: vi.fn().mockResolvedValue({ enabled: false, pac: false, exceptions: [] }),
+    add: vi.fn().mockResolvedValue({ added: [], failed: [] }),
+    remove: vi.fn().mockResolvedValue([]),
+  }
+}
+
 /** DNS 应答器在 UDP 上——TCP 探针看不到占用 */
 async function udpPortIsFree(port: number): Promise<boolean> {
   return new Promise((resolvePromise) => {
@@ -80,6 +91,7 @@ describe('runBind', () => {
     cleanup = await runBind(makeCtx(['app.invalid']), {
       spawnHelper,
       lookupHost: async () => '127.0.0.1',
+      sysProxy: noSysProxy(),
     })
     expect(cleanup).not.toBeNull()
     expect(spawnHelper).toHaveBeenCalledOnce()
@@ -109,7 +121,9 @@ describe('runBind', () => {
       captured = args
       return Promise.reject(new Error('sudo cancelled'))
     })
-    await expect(runBind(makeCtx(['app.invalid']), { spawnHelper })).rejects.toThrow('sudo cancelled')
+    await expect(
+      runBind(makeCtx(['app.invalid']), { spawnHelper, sysProxy: noSysProxy() }),
+    ).rejects.toThrow('sudo cancelled')
     expect(await udpPortIsFree(captured!.dnsPort)).toBe(true)
     expect(await portIsFree(captured!.proxyPort)).toBe(true)
   })
@@ -127,6 +141,7 @@ describe('runBind', () => {
       lookupHost: async () => (++calls <= 10 ? null : '127.0.0.1'),
       verifyTimeoutMs: 300,
       verifyIntervalMs: 50,
+      sysProxy: noSysProxy(),
     })
     expect(cleanup).not.toBeNull()
     expect(spawnHelper).toHaveBeenCalledTimes(2)
@@ -143,6 +158,7 @@ describe('runBind', () => {
         lookupHost: async () => null,
         verifyTimeoutMs: 200,
         verifyIntervalMs: 50,
+        sysProxy: noSysProxy(),
       }),
     ).rejects.toThrow(/两路/)
     expect(spawnHelper).toHaveBeenCalledTimes(2)
@@ -157,6 +173,7 @@ describe('runBind', () => {
         lookupHost: async () => null,
         verifyTimeoutMs: 600,
         verifyIntervalMs: 100,
+        sysProxy: noSysProxy(),
       }),
     ).rejects.toThrow(/自验证/)
     // 失败路径必须全量回滚：helper 停掉，DNS/代理端口释放
@@ -222,6 +239,7 @@ describe('runBind：证书编排', () => {
       issueLeaf,
       caDir: '/ca',
       tmpDir: '/tmp',
+      sysProxy: noSysProxy(),
     })
     expect(cleanup).not.toBeNull()
     expect(loadCa).toHaveBeenCalledOnce()
@@ -262,6 +280,7 @@ describe('runBind：证书编排', () => {
       issueLeaf,
       caDir: '/ca',
       tmpDir: '/tmp',
+      sysProxy: noSysProxy(),
     })
     expect(cleanup).not.toBeNull()
     expect(spawnHelper).toHaveBeenCalledTimes(2)
@@ -294,5 +313,131 @@ async function failRunBind(loadCa: unknown, spawnHelper: unknown): Promise<unkno
     issueLeaf: (() => {}) as never,
     caDir: '/ca',
     tmpDir: '/tmp',
+    sysProxy: noSysProxy(),
   })
 }
+
+type SysProxyStub = Record<'sweep' | 'detect' | 'add' | 'remove', Mock>
+
+describe('runBind：系统代理编排', () => {
+  let cleanup: BindCleanup | null
+
+  afterEach(async () => {
+    await cleanup?.()
+    cleanup = null
+  })
+
+  function stubSysProxy(overrides: Partial<SysProxyStub> = {}): SysProxyStub {
+    const base: SysProxyStub = {
+      sweep: vi.fn(),
+      detect: vi.fn(),
+      add: vi.fn(),
+      remove: vi.fn(),
+    }
+    base.sweep.mockResolvedValue(undefined)
+    base.detect.mockResolvedValue({ enabled: true, pac: false, exceptions: [] })
+    base.add.mockResolvedValue({ added: [{ service: 'Wi-Fi', entries: ['app.invalid', '*.app.invalid'] }], failed: [] })
+    base.remove.mockResolvedValue([])
+    return Object.assign(base, overrides)
+  }
+
+  it('代理开启时注入例外，退出恢复且只移除追加条目', async () => {
+    const sysProxy = stubSysProxy()
+    cleanup = await runBind(makeCtx(['app.invalid']), {
+      spawnHelper: vi.fn().mockResolvedValue(fakeHelper()),
+      lookupHost: async () => '127.0.0.1',
+      sysProxy,
+    })
+    expect(cleanup).not.toBeNull()
+    expect(sysProxy.sweep).toHaveBeenCalledOnce()
+    expect(sysProxy.detect).toHaveBeenCalledOnce()
+    expect(sysProxy.add).toHaveBeenCalledWith(['app.invalid'])
+    expect(sysProxy.remove).not.toHaveBeenCalled()
+
+    const bound = cleanup
+    if (!bound) throw new Error('expected cleanup')
+    await bound()
+    cleanup = null
+    expect(sysProxy.remove).toHaveBeenCalledOnce()
+    expect(sysProxy.remove.mock.calls[0][0]).toEqual([{ service: 'Wi-Fi', entries: ['app.invalid', '*.app.invalid'] }])
+  })
+
+  it('代理关闭时零注入：add/remove 不触，sweep 照常清扫', async () => {
+    const sysProxy = stubSysProxy({ detect: vi.fn().mockResolvedValue({ enabled: false, pac: false, exceptions: [] }) })
+    cleanup = await runBind(makeCtx(['app.invalid']), {
+      spawnHelper: vi.fn().mockResolvedValue(fakeHelper()),
+      lookupHost: async () => '127.0.0.1',
+      sysProxy,
+    })
+    expect(cleanup).not.toBeNull()
+    expect(sysProxy.add).not.toHaveBeenCalled()
+    await cleanup?.()
+    cleanup = null
+    expect(sysProxy.remove).not.toHaveBeenCalled()
+  })
+
+  it('注入失败降级警告且不影响绑定，退出路径无 remove', async () => {
+    const warnings: string[] = []
+    const ctx = makeCtx(['app.invalid'])
+    ctx.logger.warn = (msg) => warnings.push(msg)
+    const sysProxy = stubSysProxy({ add: vi.fn().mockRejectedValue(new Error('networksetup failed')) })
+    cleanup = await runBind(ctx, {
+      spawnHelper: vi.fn().mockResolvedValue(fakeHelper()),
+      lookupHost: async () => '127.0.0.1',
+      sysProxy,
+    })
+    expect(cleanup).not.toBeNull()
+    expect(warnings.some((w) => w.includes('代理例外注入失败'))).toBe(true)
+    await cleanup?.()
+    cleanup = null
+    expect(sysProxy.remove).not.toHaveBeenCalled()
+  })
+
+  it('PAC 模式注入照常并给出手动绕过提示', async () => {
+    const warnings: string[] = []
+    const ctx = makeCtx(['app.invalid'])
+    ctx.logger.warn = (msg) => warnings.push(msg)
+    cleanup = await runBind(ctx, {
+      spawnHelper: vi.fn().mockResolvedValue(fakeHelper()),
+      lookupHost: async () => '127.0.0.1',
+      sysProxy: stubSysProxy({ detect: vi.fn().mockResolvedValue({ enabled: true, pac: true, exceptions: [] }) }),
+    })
+    expect(cleanup).not.toBeNull()
+    expect(warnings.some((w) => w.includes('PAC'))).toBe(true)
+  })
+
+  it('绑定全程失败时回滚已注入的例外', async () => {
+    const sysProxy = stubSysProxy()
+    await expect(
+      runBind(makeCtx(['app.invalid']), {
+        spawnHelper: vi.fn().mockResolvedValue(fakeHelper()),
+        lookupHost: async () => null,
+        verifyTimeoutMs: 200,
+        verifyIntervalMs: 50,
+        sysProxy,
+      }),
+    ).rejects.toThrow(/两路/)
+    expect(sysProxy.remove).toHaveBeenCalledOnce()
+  })
+
+  it('部分服务注入失败时 warn 失败名单，成功部分照常恢复', async () => {
+    const warnings: string[] = []
+    const ctx = makeCtx(['app.invalid'])
+    ctx.logger.warn = (msg) => warnings.push(msg)
+    const sysProxy = stubSysProxy({
+      add: vi
+        .fn()
+        .mockResolvedValue({ added: [{ service: 'iPhone USB', entries: ['app.invalid'] }], failed: ['Wi-Fi'] }),
+    })
+    cleanup = await runBind(ctx, {
+      spawnHelper: vi.fn().mockResolvedValue(fakeHelper()),
+      lookupHost: async () => '127.0.0.1',
+      sysProxy,
+    })
+    expect(cleanup).not.toBeNull()
+    expect(warnings.some((w) => w.includes('Wi-Fi'))).toBe(true)
+    await cleanup?.()
+    cleanup = null
+    expect(sysProxy.remove).toHaveBeenCalledWith([{ service: 'iPhone USB', entries: ['app.invalid'] }])
+  })
+})

@@ -8,6 +8,7 @@ import { startDnsResponder } from './dns.ts'
 import { spawnBindHelper, type BindHelper, type SpawnHelperOptions } from './helper.ts'
 import { startBindProxy } from './proxy.ts'
 import { issueLeafCertificate, loadOrCreateCa, type CaMaterial, type CertModuleDeps, type LeafMaterial } from './cert.ts'
+import { defaultSysProxyHooks, type BypassRecord, type SysProxyHooks } from './sysproxy.ts'
 
 export type BindCleanup = () => Promise<void>
 
@@ -25,6 +26,8 @@ export interface BindDeps {
   /** 默认真实实现；测试注入桩避免触碰真实 CA 存储 */
   loadCa?: typeof loadOrCreateCa
   issueLeaf?: typeof issueLeafCertificate
+  /** 默认真实系统代理注入（scutil + networksetup）；测试注入桩避免触碰真机系统配置 */
+  sysProxy?: SysProxyHooks
 }
 
 /**
@@ -62,6 +65,57 @@ async function verifyBinding(
 }
 
 /**
+ * 把绑定域注入系统代理例外：系统代理（如 Clash 全量接管 HTTPS）会用自身 DNS 解析
+ * 绑定域——公网解析不存在，隧道直接被掐断，浏览器侧表现为 ERR_CONNECTION_CLOSED。
+ * 注入失败只降级警告，绑定主路径（DNS + 管道）不依赖例外生效。
+ */
+async function injectProxyBypass(
+  ctx: DvHookContext,
+  sysProxy: SysProxyHooks,
+  domains: string[],
+): Promise<BypassRecord[] | null> {
+  try {
+    const state = await sysProxy.detect()
+    if (!state.enabled) return null
+    if (state.pac) {
+      ctx.logger.warn('bind: 系统代理为 PAC 模式，例外注入不生效——请在代理工具中手动绕过绑定域')
+    }
+    const { added, failed } = await sysProxy.add(domains)
+    if (failed.length > 0) {
+      ctx.logger.warn(`bind: ${failed.join('、')} 的代理例外注入失败，这些网络服务上绑定域可能被代理劫持`)
+    }
+    if (added.length === 0) return null
+    ctx.logger.info(`bind: 已把 ${domains.join('、')} 加入系统代理例外，退出时自动恢复`)
+    return added
+  } catch (error) {
+    ctx.logger.warn(`bind: 系统代理例外注入失败——${(error as Error).message}（不影响绑定主路径）`)
+    return null
+  }
+}
+
+/** 退出时移除注入的例外条目；失败不抛——快照已保留，下次 bind 的清扫会重试 */
+async function restoreProxyBypass(ctx: DvHookContext, sysProxy: SysProxyHooks, records: BypassRecord[]): Promise<void> {
+  const failed = await sysProxy.remove(records)
+  if (failed.length > 0) {
+    ctx.logger.warn(`bind: ${failed.join('、')} 的代理例外恢复失败——快照保留，下次绑定自动清扫`)
+  }
+}
+
+/** 既有清理链上叠加例外恢复；未注入过则原样返回 */
+function bypassAwareCleanup(
+  ctx: DvHookContext,
+  sysProxy: SysProxyHooks,
+  records: BypassRecord[] | null,
+  cleanup: BindCleanup,
+): BindCleanup {
+  if (!records) return cleanup
+  return async () => {
+    await cleanup()
+    await restoreProxyBypass(ctx, sysProxy, records)
+  }
+}
+
+/**
  * 绑定编排：解析端口 → 起 DNS 应答器与代理 → sudo 拉起 root helper → 自验证。
  * 绑定必须显式成功：解析不到端口或两路自验证都失败都抛 DvError（静默降级等于把
  * --bind 参数吞掉，用户面对的是一个看似生效实际没有的系统变更）。
@@ -78,26 +132,39 @@ export async function runBind(ctx: DvHookContext, deps: BindDeps = {}): Promise<
     )
   }
 
-  // CA 只加载一次，leaf 每次绑定尝试现签（helper 读后即删材料，降级重试需重新出料）
-  const certDeps: CertModuleDeps = { caDir: deps.caDir, tmpDir: deps.tmpDir }
-  const ca = await (deps.loadCa ?? loadOrCreateCa)(certDeps)
-  if (ca.created) {
-    ctx.logger.info(`bind: 已创建本地 CA（${ca.certPath}），即将装入系统信任链`)
+  const sysProxy = deps.sysProxy ?? defaultSysProxyHooks()
+  // 上次崩溃的例外残留先清扫：快照驱动的幂等操作，与本轮是否注入无关
+  await sysProxy.sweep().catch((error: Error) => {
+    ctx.logger.warn(`bind: 清扫上次代理例外残留失败——${error.message}`)
+  })
+  const bypassRecords = await injectProxyBypass(ctx, sysProxy, domains)
+
+  try {
+    // CA 只加载一次，leaf 每次绑定尝试现签（helper 读后即删材料，降级重试需重新出料）
+    const certDeps: CertModuleDeps = { caDir: deps.caDir, tmpDir: deps.tmpDir }
+    const ca = await (deps.loadCa ?? loadOrCreateCa)(certDeps)
+    if (ca.created) {
+      ctx.logger.info(`bind: 已创建本地 CA（${ca.certPath}），即将装入系统信任链`)
+    }
+
+    // 主路径：/etc/resolver + 内嵌 DNS，泛子域可用
+    const primary = await attemptBind(ctx, port, domains, deps, false, ca, certDeps)
+    if (primary) return bypassAwareCleanup(ctx, sysProxy, bypassRecords, primary)
+
+    // resolver 未生效（如 macOS 26 对私有 TLD 的 mDNSResponder 回归）→ hosts 逐名降级
+    ctx.logger.warn(
+      `bind: resolver 自验证未通过，降级为 /etc/hosts 绑定——泛子域名（如 app.${domains[0]}）在降级模式下不可用`,
+    )
+    const fallback = await attemptBind(ctx, port, domains, deps, true, ca, certDeps)
+    if (fallback) return bypassAwareCleanup(ctx, sysProxy, bypassRecords, fallback)
+    throw new DvError(
+      `bind: 自验证失败——${domains.join('、')} 经 resolver 与 hosts 两路均未解析到 127.0.0.1`,
+    )
+  } catch (error) {
+    // 绑定失败时不留例外残留：域未绑定成功，绕过代理只会把解析不到的域推向直连
+    if (bypassRecords) await restoreProxyBypass(ctx, sysProxy, bypassRecords)
+    throw error
   }
-
-  // 主路径：/etc/resolver + 内嵌 DNS，泛子域可用
-  const primary = await attemptBind(ctx, port, domains, deps, false, ca, certDeps)
-  if (primary) return primary
-
-  // resolver 未生效（如 macOS 26 对私有 TLD 的 mDNSResponder 回归）→ hosts 逐名降级
-  ctx.logger.warn(
-    `bind: resolver 自验证未通过，降级为 /etc/hosts 绑定——泛子域名（如 app.${domains[0]}）在降级模式下不可用`,
-  )
-  const fallback = await attemptBind(ctx, port, domains, deps, true, ca, certDeps)
-  if (fallback) return fallback
-  throw new DvError(
-    `bind: 自验证失败——${domains.join('、')} 经 resolver 与 hosts 两路均未解析到 127.0.0.1`,
-  )
 }
 
 /** 单次绑定尝试；自验证失败返回 null（调用方决定降级或报错），其余失败抛错 */
